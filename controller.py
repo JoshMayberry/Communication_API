@@ -1,19 +1,34 @@
 __version__ = "1.0.0"
 
 #Import standard elements
+import threading
 import warnings
 import subprocess
 
+#Import communication elements for talking to other devices such as printers, the internet, a raspberry pi, etc.
+import usb
+import select
+import socket
+import serial
+import netaddr
+import serial.tools.list_ports
 
-#Import cryptodome to encrypt and decrypt files
-import Cryptodome.Random
-import Cryptodome.Cipher.AES
-import Cryptodome.PublicKey.RSA
-import Cryptodome.Cipher.PKCS1_OAEP
+#Import barcode software for drawing and decoding barcodes
+import qrcode
+import barcode
 
 #Required Modules
 ##py -m pip install
-	# pycryptodomex
+	# pyserial
+	# netaddr
+	# pyusb
+	# pyBarcode
+	# qrcode
+
+##Module dependancies (Install the following .exe and/or .dll files)
+	#The latest Windows binary on "https://sourceforge.net/projects/libusb/files/libusb-1.0/libusb-1.0.21/libusb-1.0.21.7z/download"
+		#If on 64-bit Windows, copy "MS64\dll\libusb-1.0.dll" into "C:\windows\system32"
+		#If on 32-bit windows, copy "MS32\dll\libusb-1.0.dll" into "C:\windows\SysWOW64"
 
 #User Access Variables
 ethernetError = socket.error
@@ -24,241 +39,711 @@ def build(*args, **kwargs):
 
 	return Communication(*args, **kwargs)
 
-class Communication():
-	"""Helps the user to communicate with other devices.
+#Iterators
+class Iterator(object):
+	"""Used by handle objects to iterate over their nested objects."""
 
-	CURRENTLY SUPPORTED METHODS
-		- COM Port (RS-232)
-		- Ethernet & Wi-fi
-		- Barcode
-		- USB
+	def __init__(self, data, filterNone = False):
+		if (not isinstance(data, (list, dict))):
+			data = data[:]
 
-	UPCOMING SUPPORTED METHODS
-		- Raspberry Pi GPIO
-		- QR Code
+		self.data = data
+		if (isinstance(self.data, dict)):
+			self.order = list(self.data.keys())
 
-	Example Input: Communication()
+			if (filterNone):
+				self.order = [key for key in self.data.keys() if key != None]
+			else:
+				self.order = [key if key != None else "" for key in self.data.keys()]
+
+			self.order.sort()
+
+			self.order = [key if key != "" else None for key in self.order]
+
+	def __iter__(self):
+		return self
+
+	def __next__(self):
+		if (not isinstance(self.data, dict)):
+			if not self.data:
+				raise StopIteration
+
+			return self.data.pop()
+		else:
+			if not self.order:
+				raise StopIteration
+
+			key = self.order.pop()
+			return self.data[key]
+
+#Background Processes
+class ThreadQueue():
+	"""Used by passFunction() to move functions from one thread to another.
+	Special thanks to Claudiu for the base code on https://stackoverflow.com/questions/18989446/execute-python-function-in-main-thread-from-call-in-dummy-thread
+	"""
+	def __init__(self):
+		"""Internal variables."""
+	
+		self.callback_queue = queue.Queue()
+
+	def from_dummy_thread(self, myFunction, myFunctionArgs = None, myFunctionKwargs = None):
+		"""A function from a MyThread to be called in the main thread."""
+
+		self.callback_queue.put([myFunction, myFunctionArgs, myFunctionKwargs])
+
+	def from_main_thread(self, blocking = True, printEmpty = False):
+		"""An non-critical function from the sub-thread will run in the main thread.
+
+		blocking (bool) - If True: This is a non-critical function
+		"""
+
+		def setupFunction(myFunctionList, myFunctionArgsList, myFunctionKwargsList):
+			nonlocal self
+
+			#Skip empty functions
+			if (myFunctionList != None):
+				myFunctionList, myFunctionArgsList, myFunctionKwargsList = Utilities_Base.formatFunctionInputList(self, myFunctionList, myFunctionArgsList, myFunctionKwargsList)
+				
+				#Run each function
+				answerList = []
+				for i, myFunction in enumerate(myFunctionList):
+					#Skip empty functions
+					if (myFunction != None):
+						myFunctionEvaluated, myFunctionArgs, myFunctionKwargs = Utilities_Base.formatFunctionInput(self, i, myFunctionList, myFunctionArgsList, myFunctionKwargsList)
+						answer = runFunction(myFunctionEvaluated, myFunctionArgs, myFunctionKwargs)
+						answerList.append(answer)
+
+				#Account for just one function
+				if (len(answerList) == 1):
+					answerList = answerList[0]
+			return answerList
+
+		def runFunction(myFunction, myFunctionArgs, myFunctionKwargs):
+			"""Runs a function."""
+			nonlocal self
+
+			#Has both args and kwargs
+			if ((myFunctionKwargs != None) and (myFunctionArgs != None)):
+				answer = myFunction(*myFunctionArgs, **myFunctionKwargs)
+
+			#Has args, but not kwargs
+			elif (myFunctionArgs != None):
+				answer = myFunction(*myFunctionArgs)
+
+			#Has kwargs, but not args
+			elif (myFunctionKwargs != None):
+				answer = myFunction(**myFunctionKwargs)
+
+			#Has neither args nor kwargs
+			else:
+				answer = myFunction()
+
+			return answer
+
+		if (blocking):
+			myFunction, myFunctionArgs, myFunctionKwargs = self.callback_queue.get() #blocks until an item is available
+			answer = setupFunction(myFunction, myFunctionArgs, myFunctionKwargs)
+			
+		else:       
+			while True:
+				try:
+					myFunction, myFunctionArgs, myFunctionKwargs = self.callback_queue.get(False) #doesn't block
+				
+				except queue.Empty: #raised when queue is empty
+					if (printEmpty):
+						print("--- Thread Queue Empty ---")
+					answer = None
+					break
+
+				answer = setupFunction(myFunction, myFunctionArgs, myFunctionKwargs)
+
+		return answer
+
+class MyThread(threading.Thread):
+	"""Used to run functions in the background.
+	More information on threads can be found at: https://docs.python.org/3.4/library/threading.html
+	_________________________________________________________________________
+
+	CREATE AND RUN A NEW THREAD
+	#Create new threads
+	thread1 = myThread(1, "Thread-1", 1)
+	thread2 = myThread(2, "Thread-2", 2)
+
+	#Start new threads
+	thread1.start()
+	thread2.start()
+	_________________________________________________________________________
+
+	RUNNING A FUNCTION ON A THREAD
+	After the thread has been created and started, you can run functions on it like you do on the main thread.
+	The following code shows how to run functions on the new thread:
+
+	runFunction(longFunction, [1, 2], {label: "Lorem"}, self, False)
+	_________________________________________________________________________
+
+	If you exit the main thread, the other threads will still run.
+
+	EXAMPLE CREATING A THREAD THAT EXITS WHEN THE MAIN THREAD EXITS
+	If you want the created thread to exit when the main thread exits, make it a daemon thread.
+		thread1 = myThread(1, "Thread-1", 1, daemon = True)
+
+	You can also make it a daemon using the function:
+		thread1.setDaemon(True)
+	_________________________________________________________________________
+
+	CLOSING A THREAD
+	If any thread is open, the program will not end. To close a thread use return on the function that is running in the thread.
+	The thread will then close itself automatically.
 	"""
 
-	def __init__(self):
-		"""Initialized internal variables."""
+	def __init__(self, threadID = None, name = None, counter = None, daemon = None):
+		"""Setup the thread.
 
-		self.usbDict     = {} #A dictionary that contains all of the created USB connections
-		self.comDict     = {} #A dictionary that contains all of the created COM ports
-		self.socketDict  = {} #A dictionary that contains all of the created socket connections
-		self.barcodeDict = {} #A dictionary that contains all of the created barcodes
-
-	#Barcodes
-	def getBarcodeTypes(self, *args, **kwargs):
-		"""Convenience Function"""
-
-		return self.Barcode.getTypes(self, *args, **kwargs)
-
-	def makeBarcode(self, which = None):
-		"""Creates a new barcode object.
-
-		Example Input: makeBarcode()
-		Example Input: makeBarcode(0)
-		"""
-
-		#Create barcode object
-		barcode = self.Barcode()
-		if (which in self.barcodeDict):
-			warnings.warn(f"Overwriting Barcode {which}", Warning, stacklevel = 2)
-
-		#Catalogue the barcode
-		if (which != None):
-			self.barcodeDict[which] = barcode
-		else:
-			index = 0
-			while index in self.barcodeDict:
-				index += 1
-			self.barcodeDict[index] = barcode
-
-		return barcode
-
-	def getBarcode(self, which):
-		"""Returns the requested barcode object.
-
-		Example Input: getBarcode(0)
-		"""
-
-		if (which in self.barcodeDict):
-			return self.barcodeDict[which]
-		else:
-			warnings.warn(f"There is no barcode object {which}", Warning, stacklevel = 2)
-			return None
-
-	#COM port
-	def getComPortList(self):
-		"""Returns a list of available ports.
-		Code from Matt Williams on http://stackoverflow.com/questions/1205383/listing-serial-com-ports-on-windows.
-
-		Example Input: getComPortList()
-		"""
-
-		ports = [item.device for item in serial.tools.list_ports.comports()]
-
-		return ports
-
-	def makeComPort(self, which = None):
-		"""Creates a new COM Port object.
-
-		Example Input: makeComPort()
-		Example Input: makeComPort(0)
-		"""
-
-		#Create COM object
-		comPort = self.ComPort()
-		if (which in self.comDict):
-			warnings.warn(f"Overwriting COM Port {which}", Warning, stacklevel = 2)
-
-		#Catalogue the COM port
-		if (which != None):
-			self.comDict[which] = comPort
-		else:
-			index = 0
-			while index in self.comDict:
-				index += 1
-			self.comDict[index] = comPort
-
-		return comPort
-
-	def getComPort(self, which):
-		"""Returns the requested COM object.
-
-		Example Input: getComPort(0)
-		"""
-
-		if (which in self.comDict):
-			return self.comDict[which]
-		else:
-			warnings.warn(f"There is no COM port object {which}", Warning, stacklevel = 2)
-			return None
-
-	#Ethernet
-	def makeSocket(self, which = None):
-		"""Creates a new Ethernet object.
-
-		Example Input: makeSocket()
-		Example Input: makeSocket(0)
-		"""
-
-		#Create Ethernet object
-		mySocket = self.Ethernet(self)
-		if (which in self.socketDict):
-			warnings.warn(f"Overwriting Socket {which}", Warning, stacklevel = 2)
-
-		#Catalogue the COM port
-		if (which != None):
-			self.socketDict[which] = mySocket
-		else:
-			index = 0
-			while index in self.socketDict:
-				index += 1
-			self.socketDict[index] = mySocket
-
-		return mySocket
-
-	def getSocket(self, which):
-		"""Returns the requested Ethernet object.
-
-		Example Input: getSocket(0)
-		"""
-
-		if (which in self.socketDict):
-			return self.socketDict[which]
-		else:
-			warnings.warn(f"There is no Ethernet object {which}", Warning, stacklevel = 2)
-			return None
-
-	#COM port
-	def getUSBList(self, *args, **kwargs):
-		"""Returns a list of available usb ports.
-		Code from Matt Williams on http://stackoverflow.com/questions/1205383/listing-serial-com-ports-on-windows.
-
-		Example Input: getUSBList()
-		"""
-
-		ports = self.USB.getAll(self, *args, **kwargs)
-
-		return ports
-
-	def makeUSB(self, which = None):
-		"""Creates a new USB object.
-
-		Example Input: makeUSB()
-		Example Input: makeUSB(0)
-		"""
-
-		#Create USB object
-		usb = self.USB(self)
-		if (which in self.usbDict):
-			warnings.warn(f"Overwriting USB Port {which}", Warning, stacklevel = 2)
-
-		#Catalogue the USB port
-		if (which != None):
-			self.usbDict[which] = usb
-		else:
-			index = 0
-			while index in self.usbDict:
-				index += 1
-			self.usbDict[index] = usb
-
-		return usb
-
-	def getUSB(self, which):
-		"""Returns the requested USB object.
-
-		Example Input: getUSB(0)
-		"""
-
-		if (which in self.usbDict):
-			return self.usbDict[which]
-		else:
-			warnings.warn(f"There is no USB object {which}", Warning, stacklevel = 2)
-			return None
-
-	class USB():
-		"""A controller for a USB connection.
+		threadID (int) -
+		name (str)     - The thread name. By default, a unique name is constructed of the form "Thread-N" where N is a small decimal number.
+		counter (int)  - 
+		daemon (bool)  - Sets whether the thread is daemonic. If None (the default), the daemonic property is inherited from the current thread.
 		
-		Special thanks to KM4YRI for how to install libusb on https://github.com/pyusb/pyusb/issues/120
-			- Install the latest Windows binary on "https://sourceforge.net/projects/libusb/files/libusb-1.0/libusb-1.0.21/libusb-1.0.21.7z/download"
-			- If on 64-bit Windows, copy "MS64\dll\libusb-1.0.dll" into "C:\windows\system32"
-			- If on 32-bit windows, copy "MS32\dll\libusb-1.0.dll" into "C:\windows\SysWOW64"
+		Example Input: MyThread()
+		Example Input: MyThread(1, "Thread-1", 1)
+		Example Input: MyThread(daemon = True)
 		"""
 
-		def __init__(self, parent):
-			"""Defines the internal variables needed to run."""
+		#Initialize the thread
+		threading.Thread.__init__(self, name = name, daemon = daemon)
+		# self.setDaemon(daemon)
+
+		#Setup thread properties
+		if (threadID != None):
+			self.threadID = threadID
+
+		self.stopEvent = threading.Event() #Used to stop the thread
+
+		#Initialize internal variables
+		self.shown = None
+		self.window = None
+		self.myFunction = None
+		self.myFunctionArgs = None
+		self.myFunctionKwargs = None
+
+	def runFunction(self, myFunction, myFunctionArgs, myFunctionKwargs, window, shown):
+		"""Sets the function to run in the thread object.
+
+		myFunction (str)        - What function will be ran. Can a function object
+		myFunctionArgs (list)   - The arguments for 'myFunction'
+		myFunctionKwargs (dict) - The keyword arguments for 'myFunction'
+		window (wxFrame)        - The window that called this function
+		shown (bool)            - If True: The function will only run if the window is being shown. It will wait for the window to first be shown to run.
+								  If False: The function will run regardless of whether the window is being shown or not
+								  #### THIS IS NOT WORKING YET ####
+
+		Example Input: runFunction(longFunction, [1, 2], {label: "Lorem"}, 5, False)
+		"""
+
+		#Record given values
+		self.shown = shown
+		self.window = window
+		self.myFunction = myFunction
+		self.myFunctionArgs = myFunctionArgs
+		self.myFunctionKwargs = myFunctionKwargs
+		self.start()
+
+	def run(self):
+		"""Runs the thread and then closes it."""
+
+		if (self.shown):
+			#Wait until the window is shown to start
+			while True:
+				#Check if the thread should still run
+				if (self.stopEvent.is_set()):
+					return
+
+				#Check if the window is shown yet
+				if (self.window.showWindowCheck()):
+					break
+
+				#Reduce lag
+				time.sleep(0.01)
+
+		#Has both args and kwargs
+		if ((self.myFunctionKwargs != None) and (self.myFunctionArgs != None)):
+			self.myFunction(*self.myFunctionArgs, **self.myFunctionKwargs)
+
+		#Has args, but not kwargs
+		elif (self.myFunctionArgs != None):
+			self.myFunction(*self.myFunctionArgs)
+
+		#Has kwargs, but not args
+		elif (self.myFunctionKwargs != None):
+			self.myFunction(**self.myFunctionKwargs)
+
+		#Has neither args nor kwargs
+		else:
+			self.myFunction()
+
+	def stop(self):
+		"""Stops the running thread."""
+
+		self.stopEvent.set()
+
+#Utility Classes
+class Utilities_Base():
+	def __init__(self):
+		"""Utility functions that everyone gets."""
+
+		pass
+
+	def __repr__(self):
+		representation = f"{type(self).__name__}(id = {id(self)})"
+		return representation
+
+	def __str__(self):
+		output = f"{type(self).__name__}()\n-- id: {id(self)}\n"
+		if (hasattr(self, "parent") and (self.parent != None)):
+			output += f"-- Parent: {self.parent.__repr__()}\n"
+		if (hasattr(self, "root") and (self.root != None)):
+			output += f"-- Root: {self.root.__repr__()}\n"
+		return output
+
+	def __len__(self):
+		return len(self[:])
+
+	def __contains__(self, key):
+		return self._get(key, returnExists = True)
+
+	def __iter__(self):
+		return Iterator(self.childCatalogue)
+
+	def __getitem__(self, key):
+		return self._get(key)
+
+	def __setitem__(self, key, value):
+		self.childCatalogue[key] = value
+
+	def __delitem__(self, key):
+		del self.childCatalogue[key]
+
+	def __enter__(self):			
+		return self
+
+	def __exit__(self, exc_type, exc_value, traceback):
+		if (traceback != None):
+			print(exc_type, exc_value)
+			return False
+
+	def _get(self, itemLabel = None, returnExists = False, addNew = True):
+		"""Searches the label catalogue for the requested object.
+
+		itemLabel (any) - What the object is labled as in the catalogue
+			- If slice: objects will be returned from between the given spots 
+			- If None: Will return all that would be in an unbound slice
+		addNew (bool)   - Determines what happens if the requested child does not exists
+			- If True: Creates a new child
+			- If False: Throws an error
+
+		Example Input: _get()
+		Example Input: _get(0)
+		Example Input: _get(slice(None, None, None))
+		Example Input: _get(slice(2, 7, None))
+		"""
+
+		#Account for retrieving all nested
+		if (itemLabel == None):
+			itemLabel = slice(None, None, None)
+
+		#Account for indexing
+		if (isinstance(itemLabel, slice)):
+			if (itemLabel.step != None):
+				raise FutureWarning(f"Add slice steps to _get() for indexing {self.__repr__()}")
 			
-			self.parent = parent
+			elif ((itemLabel.start != None) and (itemLabel.start not in self.childCatalogue)):
+				errorMessage = f"There is no item labled {itemLabel.start} in the row catalogue for {self.__repr__()}"
+				raise KeyError(errorMessage)
+			
+			elif ((itemLabel.stop != None) and (itemLabel.stop not in self.childCatalogue)):
+				errorMessage = f"There is no item labled {itemLabel.stop} in the row catalogue for {self.__repr__()}"
+				raise KeyError(errorMessage)
+
+			handleList = []
+			begin = False
+			for item in sorted(self.childCatalogue.keys()):
+				#Allow for slicing with non-integers
+				if ((not begin) and ((itemLabel.start == None) or (self.childCatalogue[item].label == itemLabel.start))):
+					begin = True
+				elif ((itemLabel.stop != None) and (self.childCatalogue[item].label == itemLabel.stop)):
+					break
+
+				#Slice catalogue via creation date
+				if (begin):
+					handleList.append(self.childCatalogue[item])
+			answer = handleList
+
+		elif (itemLabel not in self.childCatalogue):
+			answer = None
+		else:
+			answer = self.childCatalogue[itemLabel]
+
+		if (returnExists):
+			return answer != None
+
+		if (answer != None):
+			if (isinstance(answer, (list, tuple, range))):
+				if (len(answer) == 1):
+					answer = answer[0]
+			return answer
+
+		if (addNew):
+			return self.add(itemLabel)
+		else:
+			errorMessage = f"There is no item labled {itemLabel} in the data catalogue for {self.__repr__()}"
+			raise KeyError(errorMessage)
+
+	#Background Processes
+	def passFunction(self, myFunction, myFunctionArgs = None, myFunctionKwargs = None, thread = None):
+		"""Passes a function from one thread to another. Used to pass the function
+		If a thread object is not given it will pass from the current thread to the main thread.
+		"""
+
+		#Get current thread
+		myThread = threading.current_thread()
+		mainThread = threading.main_thread()
+
+		#How this function will be passed
+		if (thread != None):
+			pass
+
+		else:
+			if (myThread != mainThread):
+				self.controller.threadQueue.from_dummy_thread(myFunction, myFunctionArgs, myFunctionKwargs)
+
+			else:
+				warnings.warn(f"Cannot pass from the main thread to the main thread for {self.__repr__()}", Warning, stacklevel = 2)
+
+	def recieveFunction(self, blocking = True, printEmpty = False):
+		"""Passes a function from one thread to another. Used to recieve the function.
+		If a thread object is not given it will pass from the current thread to the main thread.
+		"""
+
+		self.controller.threadQueue.from_main_thread(blocking = blocking, printEmpty = printEmpty)
+
+	def backgroundRun(self, myFunction, myFunctionArgs = None, myFunctionKwargs = None, shown = False, makeThread = True):
+		"""Runs a function in the background in a way that it does not lock up the GUI.
+		Meant for functions that take a long time to run.
+		If makeThread is true, the new thread object will be returned to the user.
+
+		myFunction (str)       - The function that will be ran when the event occurs
+		myFunctionArgs (any)   - Any input arguments for myFunction. A list of multiple functions can be given
+		myFunctionKwargs (any) - Any input keyword arguments for myFunction. A list of variables for each function can be given. The index of the variables must be the same as the index for the functions
+		shown (bool)           - Determines when to run the function
+			- If True: The function will only run if the window is being shown. If the window is not shown, it will terminate the function. It will wait for the window to first be shown to run
+			- If False: The function will run regardless of whether the window is being shown or not
+		makeThread (bool)      - Determines if this function runs on a different thread
+			- If True: A new thread will be created to run the function
+			- If False: The function will only run while the GUI is idle. Note: This can cause lag. Use this for operations that must be in the main thread.
+
+		Example Input: backgroundRun(self.startupFunction)
+		Example Input: backgroundRun(self.startupFunction, shown = True)
+		"""
+
+		#Skip empty functions
+		if (myFunction != None):
+			myFunctionList, myFunctionArgsList, myFunctionKwargsList = self.formatFunctionInputList(myFunction, myFunctionArgs, myFunctionKwargs)
+
+			#Run each function
+			for i, myFunction in enumerate(myFunctionList):
+
+				#Skip empty functions
+				if (myFunction != None):
+					myFunctionEvaluated, myFunctionArgs, myFunctionKwargs = self.formatFunctionInput(i, myFunctionList, myFunctionArgsList, myFunctionKwargsList)
+
+					#Determine how to run the function
+					if (makeThread):
+						#Create parallel thread
+						thread = MyThread(daemon = True)
+						thread.runFunction(myFunctionEvaluated, myFunctionArgs, myFunctionKwargs, self, shown)
+						return thread
+					else:
+						#Add to the idling queue
+						if (self.idleQueue != None):
+							self.idleQueue.append([myFunctionEvaluated, myFunctionArgs, myFunctionKwargs, shown])
+						else:
+							warnings.warn(f"The window {self} was given it's own idle function by the user for {self.__repr__()}", Warning, stacklevel = 2)
+				else:
+					warnings.warn(f"function {i} in myFunctionList == None for backgroundRun() for {self.__repr__()}", Warning, stacklevel = 2)
+		else:
+			warnings.warn(f"myFunction == None for backgroundRun() for {self.__repr__()}", Warning, stacklevel = 2)
+
+		return None
+
+	def formatFunctionInputList(self, myFunctionList, myFunctionArgsList, myFunctionKwargsList):
+		"""Formats the args and kwargs for various internal functions."""
+
+		#Ensure that multiple function capability is given
+		##Functions
+		if (myFunctionList != None):
+			#Compensate for the user not making it a list
+			if (type(myFunctionList) != list):
+				if (type(myFunctionList) == tuple):
+					myFunctionList = list(myFunctionList)
+				else:
+					myFunctionList = [myFunctionList]
+
+			#Fix list order so it is more intuitive
+			if (len(myFunctionList) > 1):
+				myFunctionList.reverse()
+
+		##args
+		if (myFunctionArgsList != None):
+			#Compensate for the user not making it a list
+			if (type(myFunctionArgsList) != list):
+				if (type(myFunctionArgsList) == tuple):
+					myFunctionArgsList = list(myFunctionArgsList)
+				else:
+					myFunctionArgsList = [myFunctionArgsList]
+
+			#Fix list order so it is more intuitive
+			if (len(myFunctionList) > 1):
+				myFunctionArgsList.reverse()
+
+			if (len(myFunctionList) == 1):
+				myFunctionArgsList = [myFunctionArgsList]
+
+		##kwargs
+		if (myFunctionKwargsList != None):
+			#Compensate for the user not making it a list
+			if (type(myFunctionKwargsList) != list):
+				if (type(myFunctionKwargsList) == tuple):
+					myFunctionKwargsList = list(myFunctionKwargsList)
+				else:
+					myFunctionKwargsList = [myFunctionKwargsList]
+
+			#Fix list order so it is more intuitive
+			if (len(myFunctionList) > 1):
+				myFunctionKwargsList.reverse()
+
+		return myFunctionList, myFunctionArgsList, myFunctionKwargsList
+
+	def formatFunctionInput(self, i, myFunctionList, myFunctionArgsList, myFunctionKwargsList):
+		"""Formats the args and kwargs for various internal functions."""
+
+		myFunction = myFunctionList[i]
+
+		#Skip empty functions
+		if (myFunction != None):
+			#Use the correct args and kwargs
+			if (myFunctionArgsList != None):
+				myFunctionArgs = myFunctionArgsList[i]
+			else:
+				myFunctionArgs = myFunctionArgsList
+
+			if (myFunctionKwargsList != None):
+				myFunctionKwargs = myFunctionKwargsList[i]
+				
+			else:
+				myFunctionKwargs = myFunctionKwargsList
+
+			#Check for User-defined function
+			if (type(myFunction) != str):
+				#The address is already given
+				myFunctionEvaluated = myFunction
+			else:
+				#Get the address of myFunction
+				myFunctionEvaluated = eval(myFunction, {'__builtins__': None}, {})
+
+			#Ensure the *args and **kwargs are formatted correctly 
+			if (myFunctionArgs != None):
+				#Check for single argument cases
+				if ((type(myFunctionArgs) != list)):
+					#The user passed one argument that was not a list
+					myFunctionArgs = [myFunctionArgs]
+				# else:
+				#   if (len(myFunctionArgs) == 1):
+				#       #The user passed one argument that is a list
+				#       myFunctionArgs = [myFunctionArgs]
+
+			#Check for user error
+			if ((type(myFunctionKwargs) != dict) and (myFunctionKwargs != None)):
+				errorMessage = f"myFunctionKwargs must be a dictionary for function {myFunctionEvaluated.__repr__()}"
+				raise ValueError(errorMessage)
+
+		return myFunctionEvaluated, myFunctionArgs, myFunctionKwargs
+
+class Utilities_Container(Utilities_Base):
+	def __init__(self, parent):
+		"""Utility functions that only container classes get."""
+
+		#Internal Variables
+		if (not hasattr(self, "parent")): self.parent = parent
+		if (not hasattr(self, "root")): self.root = self.parent
+		
+		self.childCatalogue = {}
+
+		#Initialize Inherited Modules
+		Utilities_Base.__init__(self)
+
+	def __str__(self):
+		"""Gives diagnostic information on this when it is printed out."""
+
+		output = Utilities_Base.__str__(self)
+		if (len(self) > 0):
+			output += f"-- Children: {len(self)}\n"
+		return output
+
+	def add(self, label = None):
+		"""Adds a new child.
+
+		Example Input: add()
+		"""
+
+		child = self.Child(self, label)
+		return child
+
+	def remove(self, child = None):
+		"""Removes a child.
+
+		child (str) - Which child to remove. Can be a children_class handle
+			- If None: Will select the current child
+
+		Example Input: remove()
+		Example Input: remove("Guest")
+		"""
+
+		if (child == None):
+			child = self.current
+		elif (not isinstance(child, self.Child)):
+			child = self[child]
+		
+		child.remove()
+
+	def select(self, child = None):
+		"""Selects a particular child.
+
+		child (str) - Which child to select. Can be a children_class handle
+			- If None: Will select the default child
+
+		Example Input: select()
+		Example Input: select("Guest")
+		"""
+
+		if (child == None):
+			child = list(self)[0]
+		elif (not isinstance(child, self.Child)):
+			child = self[child]
+		
+		self.current = child
+
+class Utilities_Child(Utilities_Base):
+	def __init__(self, parent, label):
+		"""Utility functions that only widget classes get."""
+
+		#Internal Variables
+		if (not hasattr(self, "label")): self.label = label
+		if (not hasattr(self, "parent")): self.parent = parent
+		if (not hasattr(self, "root")): self.root = self.parent.root
+		
+		#Nest in parent
+		self.parent[self.label] = self
+
+		#Initialize Inherited Modules
+		Utilities_Base.__init__(self)
+
+	def __str__(self):
+		"""Gives diagnostic information on this when it is printed out."""
+
+		output = Utilities_Base.__str__(self)
+		return output
+
+	def rename(self, value):
+		"""Renames this child to the new label.
+
+		value (str) - The new label for this child
+
+		Example Input: rename("Guest")
+		"""
+
+		del self.parent[self.label]
+		
+		self.label = value
+		self.parent[value] = self
+
+	def remove(self):
+		"""Removes the rows in the database corresponding to this child.
+
+		Example Input: remove()
+		"""
+
+		#Remove Child
+		del self.parent[self.label]
+
+		#Account for current selection
+		if (self.parent.current == self):
+			self.parent.select()
+
+	def select(self):
+		"""Selects this child.
+
+		Example Input: select()
+		"""
+
+		self.parent.select(self)
+
+#API Library
+class USB(Utilities_Container):
+	"""A controller for a USB connection.
+	
+	Special thanks to KM4YRI for how to install libusb on https://github.com/pyusb/pyusb/issues/120
+		- Install the latest Windows binary on "https://sourceforge.net/projects/libusb/files/libusb-1.0/libusb-1.0.21/libusb-1.0.21.7z/download"
+		- If on 64-bit Windows, copy "MS64\dll\libusb-1.0.dll" into "C:\windows\system32"
+		- If on 32-bit windows, copy "MS32\dll\libusb-1.0.dll" into "C:\windows\SysWOW64"
+	
+	______________________ EXAMPLE USE ______________________
+	
+	com = API_Com.build()
+	usb = com.usb[0]
+	usb.open(1529, 16900)
+	data = usb.listen()
+	_________________________________________________________
+	"""
+
+	def __init__(self, parent):
+		"""Defines the internal variables needed to run."""
+
+		#Initialize Inherited Modules
+		Utilities_Container.__init__(self, parent)
+
+	def getAll(self):
+		"""Returns all connected usb.
+		Modified Code from: https://www.orangecoat.com/how-to/use-pyusb-to-find-vendor-and-product-ids-for-usb-devices
+
+		Example Input: getAll()
+		"""
+
+		valueList = []
+		devices = usb.core.find(find_all=True)
+		for config in devices:
+			value = (config.idVendor, config.idProduct)#, usb.core._try_lookup(usb._lookup.device_classes, config.bDeviceClass), usb.core._try_get_string(config, config.iProduct), usb.core._try_get_string(config, config.iManufacturer))
+			valueList.append(value)
+
+		return valueList
+
+	class Child(Utilities_Child):
+		"""A USB conection."""
+
+		def __init__(self, parent, label):
+			"""Defines the internal variables needed to run."""
+
+			#Initialize Inherited Modules
+			Utilities_Child.__init__(self, parent, label)
+		
+			#Internal Variables
 			self.device = None
-			self.catalogue = {} #Information on the current usb device
 
 			self.current_config = None
 			self.current_interface = None
 			self.current_endpoint = None
 
-		def getAll(self):
-			"""Returns all connected usb objects.
-			Modified Code from: https://www.orangecoat.com/how-to/use-pyusb-to-find-vendor-and-product-ids-for-usb-devices
-
-			Example Input: getAll()
-			"""
-
-			valueList = []
-			return valueList
-			
-
-			devices = usb.core.find(find_all=True)
-			for config in devices:
-				value = (config.idVendor, config.idProduct)#, usb.core._try_lookup(usb._lookup.device_classes, config.bDeviceClass), usb.core._try_get_string(config, config.iProduct), usb.core._try_get_string(config, config.iManufacturer))
-				valueList.append(value)
-
-			return valueList
-
 		def open(self, vendor, product = None):
-			"""Connects to a USB object.
+			"""Connects to a USB.
 			Modified Code from: https://github.com/walac/pyusb/blob/master/docs/tutorial.rst
 
 			Special thanks to frva for how to allow device configurations on https://stackoverflow.com/questions/31960314/pyusb-1-0-notimplementederror-operation-not-supported-or-unimplemented-on-this
@@ -322,7 +807,7 @@ class Communication():
 						self.catalogue[i][j][k]["data"] = usb._lookup.ep_attributes[(endpoint.bmAttributes & 0x3)]
 
 		def info(self):
-			"""Returns info on the current USB object.
+			"""Returns info on the current USB.
 
 			Example Input: info()
 			"""
@@ -368,35 +853,193 @@ class Communication():
 					usb.util.release_interface(device, interface.bInterfaceNumber)
 					# device.attach_kernel_driver(interface.bInterfaceNumber)
 
+class Ethernet(Utilities_Container):
+	"""A controller for a Ethernet connection.
+	
+	Note: If you create a socket in a background function, 
+	do not try to read or write to your GUI until you create and open the socket.
+	If you do not, the GUI will freeze up.
+	
+	______________________ EXAMPLE USE ______________________
+	
+	com = API_Com.build()
+	ethernet = com.ethernet[0]
+	ethernet.open("192.168.0.21")
+	ethernet.send("Lorem Ipsum")
+	ethernet.close()
+	_________________________________________________________
 
-	class Ethernet():
-		"""A controller for a single ethernet socket.
+	com = API_Com.build()
+	ethernet = com.ethernet[0]
+	with ethernet.open("192.168.0.21"):
+		ethernet.send("Lorem Ipsum")
+	_________________________________________________________
+	"""
 
-		Note: If you create a socket in a background function, 
-		do not try to read or write to your GUI until you create and open the socket.
-		If you do not, the GUI will freeze up.
+	def __init__(self, parent):
+		"""Defines the internal variables needed to run."""
+
+		#Initialize Inherited Modules
+		Utilities_Container.__init__(self, parent)
+		
+		#Internal Variables
+		self.ipScanBlock = [] #Used to store active ip addresses from an ip scan
+		self.ipScanStop  = False #Used to stop the ip scanning function early
+
+	def getAll(self):
+		"""Returns all local area connections.
+
+		Example Input: getAll()
 		"""
 
-		def __init__(self, parent):
+		self.startScanIpRange()
+
+		finished = False
+		while (not finished):
+			valueList, finished = self.checkScanIpRange()
+			time.sleep(100 / 1000)
+
+		return valueList
+
+	def ping(self, address):
+		"""Returns True if the given ip address is online. Otherwise, it returns False.
+		Code modified from http://www.opentechguides.com/how-to/article/python/57/python-ping-subnet.html
+
+		address (str) - The ip address to ping
+
+		Example Input: ping("169.254.231.0")
+		"""
+
+		#Configure subprocess to hide the console window
+		info = subprocess.STARTUPINFO()
+		info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+		info.wShowWindow = subprocess.SW_HIDE
+
+		#Remove Whitespace
+		address = re.sub("\s", "", address)
+
+		#Ping the address
+		output = subprocess.Popen(['ping', '-n', '1', '-w', '500', address], stdout=subprocess.PIPE, startupinfo=info).communicate()[0]
+		output = output.decode("utf-8")
+
+		#Interpret Ping Results
+		if ("Destination host unreachable" in output):
+			return False #Offline
+
+		elif ("Request timed out" in output):
+			return False #Offline
+
+		elif ("could not find host" in output):
+			return False #Offline
+
+		else:
+			return True #Online
+
+	def startScanIpRange(self, start = None, end = None):
+		"""Scans a range of ip addresses in the given range for online ones.
+		Because this can take some time, it saves the list of ip addresses as an internal variable.
+		Special thanks to lovetocode on http://stackoverflow.com/questions/4525492/python-list-of-addressable-ip-addresses
+
+		start (str) - The ip address to start at
+			- If None: Will use the current ip address group and start at 0
+		end (str)  - The ip address to stop after
+			- If None: Will use the current ip address group and end at 255
+
+		Example Input: startScanIpRange()
+		Example Input: startScanIpRange("169.254.231.0", "169.254.231.24")
+		"""
+
+		def runFunction(self, start, end):
+			"""Needed to scan on a separate thread so the GUI is not tied up."""
+
+			#Remove Whitespace
+			start = re.sub("\s", "", start)
+			end = re.sub("\s", "", end)
+
+			#Get ip scan range
+			networkAddressSet = list(netaddr.IPRange(start, end))
+
+			#For each IP address in the subnet, run the ping command with the subprocess.popen interface
+			for i in range(len(networkAddressSet)):
+				if (self.ipScanStop):
+					self.ipScanStop = False
+					break
+
+				address = str(networkAddressSet[i])
+				online = self.ping(address)
+
+				#Determine if the address is desired by the user
+				if (online):
+					self.ipScanBlock.append(address)
+
+			#Mark end of message
+			self.ipScanBlock.append(None)
+
+		if ((start == None) or (end == None)):
+			raise FutureWarning("Add code here for getting the current ip Address")
+			currentIp = "169.254.231.24"
+			start = currentIp[:-2] + "0"
+			end = currentIp[:-2] + "255"
+
+		#Listen for data on a separate thread
+		self.ipScanBlock = []
+		self.backgroundRun(runFunction, [self, start, end])
+
+	def checkScanIpRange(self):
+		"""Checks for found active ip addresses from the scan.
+		Each read portion is an element in a list.
+		Returns the current block of data and whether it is finished listening or not.
+
+		Example Input: checkScanIpRange()
+		"""
+
+		#The entire message has been read once the last element is None.
+		finished = False
+		if (len(self.ipScanBlock) != 0):
+			if (self.ipScanBlock[-1] == None):
+				finished = True
+				self.ipScanBlock.pop(-1) #Remove the None from the end so the user does not get confused
+
+		return self.ipScanBlock, finished
+
+	def stopScanIpRange(self):
+		"""Stops listening for data from the socket.
+		Note: The data is still in the buffer. You can resume listening by starting startRecieve() again.
+		To flush it, close the socket and then open it again.
+
+		Example Input: stopScanIpRange()
+		"""
+
+		self.ipScanStop = True
+
+	class Child(Utilities_Child):
+		"""An Ethernet connection."""
+
+		def __init__(self, parent, label):
 			"""Defines the internal variables needed to run."""
 
-			#Create internal variables
-			self.parent = parent #The GUI object
+			#Initialize Inherited Modules
+			Utilities_Child.__init__(self, parent, label)
 
 			#Background thread variables
 			self.dataBlock   = [] #Used to recieve data from the socket
-			self.ipScanBlock = [] #Used to store active ip addresses from an ip scan
 			self.clientDict  = {} #Used to keep track of all client connections {"mySocket": connection object (socket), "data": client dataBlock (str), "stop": stop flag (bool), "listening": currently listening flag, "finished": recieved all flag}
 
 			self.recieveStop = False #Used to stop the recieving function early
-			self.ipScanStop  = False #Used to stop the ip scanning function early
 			self.recieveListening = False #Used to chek if the recieve function has started listening or if it has finished listeing
 
 			#Create the socket
-			self.mySocket = None
+			self.mySocket = None #Rename this to device
 			self.stream = None
 			self.address = None
 			self.port = None
+
+		def __exit__(self, exc_type, exc_value, traceback):
+			"""Allows the user to use a with statement to make sure the socket connection gets closed after use."""
+
+			self.close()
+
+			return Utilities_Container.__exit__(self, exc_type, exc_value, traceback)
 
 		def open(self, address, port = 9100, error = False, pingCheck = False, 
 			timeout = -1, stream = True):
@@ -432,7 +1075,7 @@ class Communication():
 
 			#Make sure it exists
 			if (pingCheck):
-				addressExists = self.ping(address)
+				addressExists = self.parent.ping(address)
 
 				if (not addressExists):
 					print(f"Cannot ping address {address}")
@@ -572,7 +1215,7 @@ class Communication():
 
 			#Listen for data on a separate thread
 			self.dataBlock = []
-			self.parent.backgroundRun(runFunction, [self, bufferSize])
+			self.backgroundRun(runFunction, [self, bufferSize])
 
 		def checkRecieve(self, removeNone = True):
 			"""Checks what the recieveing data looks like.
@@ -681,7 +1324,7 @@ class Communication():
 			self.mySocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 			#Listen for data on a separate thread
-			self.parent.backgroundRun(runFunction)
+			self.backgroundRun(runFunction)
 
 		def clientSend(self, clientIp, data, logoff = False):
 			"""Sends data across the socket connection to a client.
@@ -758,7 +1401,7 @@ class Communication():
 
 			#Listen for data on a separate thread
 			self.dataBlock = []
-			self.parent.backgroundRun(runFunction, [self, clientIp, bufferSize])
+			self.backgroundRun(runFunction, [self, clientIp, bufferSize])
 
 		def clientCheckRecieve(self, clientIp):
 			"""Checks what the recieveing data looks like.
@@ -935,108 +1578,6 @@ class Communication():
 
 			return address
 
-		def ping(self, address):
-			"""Returns True if the given ip address is online. Otherwise, it returns False.
-			Code modified from http://www.opentechguides.com/how-to/article/python/57/python-ping-subnet.html
-
-			address (str) - The ip address to ping
-
-			Example Input: ping("169.254.231.0")
-			"""
-
-			#Configure subprocess to hide the console window
-			info = subprocess.STARTUPINFO()
-			info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-			info.wShowWindow = subprocess.SW_HIDE
-
-			#Remove Whitespace
-			address = re.sub("\s", "", address)
-
-			#Ping the address
-			output = subprocess.Popen(['ping', '-n', '1', '-w', '500', address], stdout=subprocess.PIPE, startupinfo=info).communicate()[0]
-			output = output.decode("utf-8")
-
-			#Interpret Ping Results
-			if ("Destination host unreachable" in output):
-				return False #Offline
-
-			elif ("Request timed out" in output):
-				return False #Offline
-
-			elif ("could not find host" in output):
-				return False #Offline
-
-			else:
-				return True #Online
-
-		def startScanIpRange(self, start, end):
-			"""Scans a range of ip addresses in the given range for online ones.
-			Because this can take some time, it saves the list of ip addresses as an internal variable.
-			Special thanks to lovetocode on http://stackoverflow.com/questions/4525492/python-list-of-addressable-ip-addresses
-
-			start (str) - The ip address to start at
-			end (str)  - The ip address to stop after
-
-			Example Input: startScanIpRange("169.254.231.0", "169.254.231.24")
-			"""
-
-			def runFunction(self, start, end):
-				"""Needed to scan on a separate thread so the GUI is not tied up."""
-
-				#Remove Whitespace
-				start = re.sub("\s", "", start)
-				end = re.sub("\s", "", end)
-
-				#Get ip scan range
-				networkAddressSet = list(netaddr.IPRange(start, end))
-
-				#For each IP address in the subnet, run the ping command with the subprocess.popen interface
-				for i in range(len(networkAddressSet)):
-					if (self.ipScanStop):
-						self.ipScanStop = False
-						break
-
-					address = str(networkAddressSet[i])
-					online = self.ping(address)
-
-					#Determine if the address is desired by the user
-					if (online):
-						self.ipScanBlock.append(address)
-
-				#Mark end of message
-				self.ipScanBlock.append(None)
-
-			#Listen for data on a separate thread
-			self.ipScanBlock = []
-			self.parent.backgroundRun(runFunction, [self, start, end])
-
-		def checkScanIpRange(self):
-			"""Checks for found active ip addresses from the scan.
-			Each read portion is an element in a list.
-			Returns the current block of data and whether it is finished listening or not.
-
-			Example Input: checkScanIpRange()
-			"""
-
-			#The entire message has been read once the last element is None.
-			finished = False
-			if (len(self.ipScanBlock) != 0):
-				if (self.ipScanBlock[-1] == None):
-					finished = True
-					self.ipScanBlock.pop(-1) #Remove the None from the end so the user does not get confused
-
-			return self.ipScanBlock, finished
-
-		def stopScanIpRange(self):
-			"""Stops listening for data from the socket.
-			Note: The data is still in the buffer. You can resume listening by starting startRecieve() again.
-			To flush it, close the socket and then open it again.
-
-			Example Input: stopScanIpRange()
-			"""
-
-			self.ipScanStop = True
-
 		def isOpen(self, address = None):
 			"""Returns if a socket is already open."""
 
@@ -1050,203 +1591,262 @@ class Communication():
 				return True
 			return False
 
-	class ComPort():
-		"""A controller for a single COM port."""
+class ComPort(Utilities_Container):
+	"""A controller for a ComPort connection.
+	
+	______________________ EXAMPLE USE ______________________
+	
+	com = API_Com.build()
+	comPort = com.comPort[0]
 
-		def __init__(self):
+	comPort.setPort("COM12")
+	comPort.setBaudRate(115200)
+	comPort.setParity(None)
+	comPort.setDataBits(8)
+	comPort.setStopBits(1)
+	comPort.openComPort()
+
+	comPort.open()
+	data = comPort.read()
+	comPort.close()
+	_________________________________________________________
+
+	com = API_Com.build()
+	comPort = com.comPort[0]
+
+	with comPort:
+		comPort.setPort("COM1")
+		comPort.open()
+		data = comPort.read()
+
+	with comPort.open("COM2"):
+		data = comPort.read()
+	_________________________________________________________
+	"""
+
+	def __init__(self, parent):
+		"""Defines the internal variables needed to run."""
+
+		#Initialize Inherited Modules
+		Utilities_Container.__init__(self, parent)
+
+	def getAll(self):
+		"""Returns all connected com ports.
+		Modified code from Matt Williams on http://stackoverflow.com/questions/1205383/listing-serial-com-ports-on-windows.
+
+		Example Input: getAll()
+		"""
+
+		valueList = [item.device for item in serial.tools.list_ports.comports()]
+
+		return valueList
+
+	class Child(Utilities_Child):
+		"""A COM Port connection."""
+
+		def __init__(self, parent, label):
 			"""Defines the internal variables needed to run."""
 
-			#Create needed objects
-			self.serialPort = serial.Serial()
+			#Initialize Inherited Modules
+			Utilities_Child.__init__(self, parent, label)
+		
+			#Internal Variables
+			self.serialPort = serial.Serial() #Change this to device
 
 			#These are the defaults for serial.Serial.__init__()
-			self.comPort         = None                #The device name
-			self.comBaudRate     = 9600                #Rate at which information is transferred
-			self.comByteSize     = serial.EIGHTBITS    #Number of bits per bytes
-			self.comParity       = serial.PARITY_NONE  #For error detection
-			self.comStopBits     = serial.STOPBITS_ONE #Signals message end
-			self.comTimeoutRead  = None                #Read timeout. Makes the listener wait
-			self.comTimeoutWrite = None                #Write timeout. Makes the speaker wait
-			self.comFlowControl  = False               #Software flow control
-			self.comRtsCts       = False               #Hardware (RTS/CTS) flow control
-			self.comDsrDtr       = False               #Hardware (DSR/DTR) flow control
-			self.comMessage      = None                #What is sent to the listener
+			self.port         = None                #The device name
+			self.baudRate     = 9600                #Rate at which information is transferred
+			self.byteSize     = serial.EIGHTBITS    #Number of bits per bytes
+			self.parity       = serial.PARITY_NONE  #For error detection
+			self.stopBits     = serial.STOPBITS_ONE #Signals message end
+			self.timeoutRead  = None                #Read timeout. Makes the listener wait
+			self.timeoutWrite = None                #Write timeout. Makes the speaker wait
+			self.flowControl  = False               #Software flow control
+			self.rtsCts       = False               #Hardware (RTS/CTS) flow control
+			self.dsrDtr       = False               #Hardware (DSR/DTR) flow control
+			self.message      = None                #What is sent to the listener
 
-		#Getters
-		def getComPort(self):
+		def __exit__(self, exc_type, exc_value, traceback):
+			"""Allows the user to use a with statement to make sure the socket connection gets closed after use."""
+
+			self.close()
+
+			return Utilities_Container.__exit__(self, exc_type, exc_value, traceback)
+
+		def getPort(self):
 			"""Returns the port.
 
-			Example Input: getComPort()
+			Example Input: getPort()
 			"""
 
-			return self.comPort
+			return self.port
 
-		def getComBaudRate(self):
+		def getBaudRate(self):
 			"""Returns the baud rate.
 
-			Example Input: getComBaudRate()
+			Example Input: getBaudRate()
 			"""
 
-			return self.comBaudRate
+			return self.baudRate
 
-		def getComDataBits(self):
-			"""Overridden function for getComByteSize().
+		def getDataBits(self):
+			"""Overridden function for getByteSize().
 
-			Example Input: getComDataBits()
+			Example Input: getDataBits()
 			"""
 
-			value = self.getComByteSize()
+			value = self.getByteSize()
 			return value
 
-		def getComByteSize(self):
+		def getByteSize(self):
 			"""Returns the byte size.
 
-			Example Input: getComByteSize()
+			Example Input: getByteSize()
 			"""
 
 			#Format the byte size
-			if (self.comByteSize == serial.FIVEBITS):
+			if (self.byteSize == serial.FIVEBITS):
 				return 5
 
-			elif (self.comByteSize == serial.SIXBITS):
+			elif (self.byteSize == serial.SIXBITS):
 				return 6
 
-			elif (self.comByteSize == serial.SEVENBITS):
+			elif (self.byteSize == serial.SEVENBITS):
 				return 7
 
-			elif (self.comByteSize == serial.EIGHTBITS):
+			elif (self.byteSize == serial.EIGHTBITS):
 				return 8
 
 			else:
-				return self.comByteSize
+				return self.byteSize
 
-		def getComParity(self):
+		def getParity(self):
 			"""Returns the parity.
 
-			Example Input: getComParity()
+			Example Input: getParity()
 			"""
 
-			if (self.comParity == serial.PARITY_NONE):
+			if (self.parity == serial.PARITY_NONE):
 				return None
 
-			elif (self.comParity == serial.PARITY_ODD):
+			elif (self.parity == serial.PARITY_ODD):
 				return "odd"
 			
-			elif (self.comParity == serial.PARITY_EVEN):
+			elif (self.parity == serial.PARITY_EVEN):
 				return "even"
 			
-			elif (self.comParity == serial.PARITY_MARK):
+			elif (self.parity == serial.PARITY_MARK):
 				return "mark"
 			
-			elif (self.comParity == serial.PARITY_SPACE):
+			elif (self.parity == serial.PARITY_SPACE):
 				return "space"
 
 			else:
-				return self.comParity
+				return self.parity
 
-		def getComStopBits(self):
+		def getStopBits(self):
 			"""Returns the stop bits.
 
-			Example Input: getComStopBits()
+			Example Input: getStopBits()
 			"""
 
-			if (self.comStopBits == serial.STOPBITS_ONE):
+			if (self.stopBits == serial.STOPBITS_ONE):
 				return 1
 
-			elif (self.comStopBits == serial.STOPBITS_TWO):
+			elif (self.stopBits == serial.STOPBITS_TWO):
 				return 2
 
-			elif (self.comStopBits == serial.STOPBITS_ONE_POINT_FIVE):
+			elif (self.stopBits == serial.STOPBITS_ONE_POINT_FIVE):
 				return 1.5
 
 			else:
-				return self.comStopBits
+				return self.stopBits
 
-		def getComTimeoutRead(self):
+		def getTimeoutRead(self):
 			"""Returns the read timeout.
 
-			Example Input: getComTimeoutRead()
+			Example Input: getTimeoutRead()
 			"""
 
-			return self.comTimeoutRead
+			return self.timeoutRead
 
-		def getComTimeoutWrite(self):
+		def getTimeoutWrite(self):
 			"""Returns the write timeout.
 
-			Example Input: getComTimeoutWrite()
+			Example Input: getTimeoutWrite()
 			"""
 
-			return self.comTimeoutWrite
+			return self.timeoutWrite
 
-		def getComFlow(self):
+		def getFlow(self):
 			"""Returns the software flow control.
 
-			Example Input: getComFlow()
+			Example Input: getFlow()
 			"""
 
-			return self.comFlowControl
+			return self.flowControl
 
-		def getComFlowS(self):
+		def getFlowS(self):
 			"""Returns the hardware flow control.
 
-			Example Input: getComFlowS(True)
+			Example Input: getFlowS(True)
 			"""
 
-			return self.comRtsCts
+			return self.rtsCts
 
-		def getComFlowR(self):
+		def getFlowR(self):
 			"""Returns the hardware flow control.
 
-			Example Input: getComFlowR()
+			Example Input: getFlowR()
 			"""
 
-			return self.comDsrDtr
+			return self.dsrDtr
 
-		def getComMessage(self):
+		def getMessage(self):
 			"""Returns the message that will be sent.
 
-			Example Input: getComMessage()
+			Example Input: getMessage()
 			"""
 
-			return self.comMessage
+			return self.message
 
 		#Setters
-		def setComPort(self, value):
+		def setPort(self, value):
 			"""Changes the port.
 
 			value (str) - The new port
 
-			Example Input: setComPort("COM1")
+			Example Input: setPort("COM1")
 			"""
 
-			self.comPort = value
+			self.port = value
 
-		def setComBaudRate(self, value):
+		def setBaudRate(self, value):
 			"""Changes the baud rate.
 
 			value (int) - The new baud rate
 
-			Example Input: setComBaudRate(9600)
+			Example Input: setBaudRate(9600)
 			"""
 
-			self.comBaudRate = value
+			self.baudRate = value
 
-		def setComDataBits(self, value):
-			"""Overridden function for setComByteSize().
+		def setDataBits(self, value):
+			"""Overridden function for setByteSize().
 
 			value (int) - The new byte size. Can be 5, 6, 7, or 8
 
-			Example Input: setComDataBits(8)
+			Example Input: setDataBits(8)
 			"""
 
-			self.setComByteSize(value)
+			self.setByteSize(value)
 
-		def setComByteSize(self, value):
+		def setByteSize(self, value):
 			"""Changes the byte size.
 
 			value (int) - The new byte size. Can be 5, 6, 7, or 8
 
-			Example Input: setComByteSize(8)
+			Example Input: setByteSize(8)
 			"""
 
 			#Ensure that value is an integer
@@ -1255,23 +1855,23 @@ class Communication():
 
 			#Format the byte size
 			if (value == 5):
-				self.comByteSize = serial.FIVEBITS
+				self.byteSize = serial.FIVEBITS
 
 			elif (value == 6):
-				self.comByteSize = serial.SIXBITS
+				self.byteSize = serial.SIXBITS
 
 			elif (value == 7):
-				self.comByteSize = serial.SEVENBITS
+				self.byteSize = serial.SEVENBITS
 
 			elif (value == 8):
-				self.comByteSize = serial.EIGHTBITS
+				self.byteSize = serial.EIGHTBITS
 
-		def setComParity(self, value):
+		def setParity(self, value):
 			"""Changes the parity.
 
 			value (str) - The new parity. Can be None, "odd", "even", "mark", or "space". Only the first letter is needed
 
-			Example Input: setComParity("odd")
+			Example Input: setParity("odd")
 			"""
 
 			if (value != None):
@@ -1280,19 +1880,19 @@ class Communication():
 					value = value.lower()
 
 					if (value[0] == "n"):
-						self.comParity = serial.PARITY_NONE
+						self.parity = serial.PARITY_NONE
 					
 					elif (value[0] == "o"):
-						self.comParity = serial.PARITY_ODD
+						self.parity = serial.PARITY_ODD
 					
 					elif (value[0] == "e"):
-						self.comParity = serial.PARITY_EVEN
+						self.parity = serial.PARITY_EVEN
 					
 					elif (value[0] == "m"):
-						self.comParity = serial.PARITY_MARK
+						self.parity = serial.PARITY_MARK
 					
 					elif (value[0] == "s"):
-						self.comParity = serial.PARITY_SPACE
+						self.parity = serial.PARITY_SPACE
 
 					else:
 						warnings.warn(f"There is no parity {value}", Warning, stacklevel = 2)
@@ -1303,18 +1903,18 @@ class Communication():
 					return False
 
 			else:
-				self.comParity = serial.PARITY_NONE
+				self.parity = serial.PARITY_NONE
 
 			return True
 
-		def setComStopBits(self, value):
+		def setStopBits(self, value):
 			"""Changes the stop bits.
 
 			value (int) - The new stop bits
 
-			Example Input: setComStopBits(1)
-			Example Input: setComStopBits(1.5)
-			Example Input: setComStopBits(2)
+			Example Input: setStopBits(1)
+			Example Input: setStopBits(1.5)
+			Example Input: setStopBits(2)
 			"""
 
 			#Ensure that value is an integer or float
@@ -1323,18 +1923,18 @@ class Communication():
 
 			#Format the stop bits
 			if (value == 1):
-				self.comStopBits = serial.STOPBITS_ONE
+				self.stopBits = serial.STOPBITS_ONE
 
 			elif (value == 2):
-				self.comStopBits = serial.STOPBITS_TWO
+				self.stopBits = serial.STOPBITS_TWO
 
 			elif (value == 1.5):
-				self.comStopBits = serial.STOPBITS_ONE_POINT_FIVE
+				self.stopBits = serial.STOPBITS_ONE_POINT_FIVE
 
 			else:
 				warnings.warn(f"There is no stop bit {value} for {self.__repr__()}", Warning, stacklevel = 2)
 
-		def setComTimeoutRead(self, value):
+		def setTimeoutRead(self, value):
 			"""Changes the read timeout.
 
 			value (int) - The new read timeout
@@ -1342,14 +1942,14 @@ class Communication():
 						  0: Do not wait
 						  Any positive int or float: How many seconds to wait
 
-			Example Input: setComTimeoutRead(None)
-			Example Input: setComTimeoutRead(1)
-			Example Input: setComTimeoutRead(2)
+			Example Input: setTimeoutRead(None)
+			Example Input: setTimeoutRead(1)
+			Example Input: setTimeoutRead(2)
 			"""
 
-			self.comTimeoutRead = value
+			self.timeoutRead = value
 
-		def setComTimeoutWrite(self, value):
+		def setTimeoutWrite(self, value):
 			"""Changes the write timeout.
 
 			value (int) - The new write timeout
@@ -1357,54 +1957,54 @@ class Communication():
 						  0: Do not wait
 						  Any positive int or float: How many seconds to wait
 
-			Example Input: setComTimeoutWrite(None)
-			Example Input: setComTimeoutWrite(1)
-			Example Input: setComTimeoutWrite(2)
+			Example Input: setTimeoutWrite(None)
+			Example Input: setTimeoutWrite(1)
+			Example Input: setTimeoutWrite(2)
 			"""
 
-			self.comTimeoutWrite = value
+			self.timeoutWrite = value
 
-		def setComFlow(self, value):
+		def setFlow(self, value):
 			"""Changes the software flow control.
 
 			value (bool) - If True: Enables software flow control
 
-			Example Input: setComFlow(True)
+			Example Input: setFlow(True)
 			"""
 
-			self.comFlowControl = value
+			self.flowControl = value
 
-		def setComFlowS(self, value):
+		def setFlowS(self, value):
 			"""Changes the hardware flow control.
 
 			value (bool) - If True: Enables RTS/CTS flow control
 
-			Example Input: setComFlowS(True)
+			Example Input: setFlowS(True)
 			"""
 
-			self.comRtsCts = value
+			self.rtsCts = value
 
-		def setComFlowR(self, value):
+		def setFlowR(self, value):
 			"""Changes the hardware flow control.
 
 			value (bool) - If True: Enables DSR/DTR flow control
 
-			Example Input: setComFlowR(True)
+			Example Input: setFlowR(True)
 			"""
 
-			self.comDsrDtr = value
+			self.dsrDtr = value
 
-		def setComMessage(self, value):
+		def setMessage(self, value):
 			"""Changes the message that will be sent.
 
 			value (str) - The new message
 
-			Example Input: setComMessage("Lorem ipsum")
+			Example Input: setMessage("Lorem ipsum")
 			"""
 
-			self.comMessage = value
+			self.message = value
 
-		def openComPort(self, port = None):
+		def open(self, port = None):
 			"""Gets the COM port that the zebra printer is plugged into and opens it.
 			Returns True if the port sucessfully opened.
 			Returns False if the port failed to open.
@@ -1412,24 +2012,25 @@ class Communication():
 			### Untested ###
 			port (str) - If Provided, opens this port instead of the port in memory
 
-			Example Input: openComPort()
-			Example Input: openComPort("COM2")
+			Example Input: open()
+			Example Input: open("COM2")
 			"""
 
 			#Configure port options
 			if (port != None):
 				self.serialPort.port     = port
 			else:
-				self.serialPort.port     = self.comPort
-			self.serialPort.baudrate     = self.comBaudRate
-			self.serialPort.bytesize     = self.comByteSize
-			self.serialPort.parity       = self.comParity
-			self.serialPort.stopbits     = self.comStopBits
-			self.serialPort.timeout      = self.comTimeoutRead
-			self.serialPort.writeTimeout = self.comTimeoutWrite
-			self.serialPort.xonxoff      = self.comFlowControl
-			self.serialPort.rtscts       = self.comRtsCts
-			self.serialPort.dsrdtr       = self.comDsrDtr
+				self.serialPort.port     = self.port
+
+			self.serialPort.baudrate     = self.baudRate
+			self.serialPort.bytesize     = self.byteSize
+			self.serialPort.parity       = self.parity
+			self.serialPort.stopbits     = self.stopBits
+			self.serialPort.timeout      = self.timeoutRead
+			self.serialPort.writeTimeout = self.timeoutWrite
+			self.serialPort.xonxoff      = self.flowControl
+			self.serialPort.rtscts       = self.rtsCts
+			self.serialPort.dsrdtr       = self.dsrDtr
 
 			#Open the port
 			try:
@@ -1452,35 +2053,35 @@ class Communication():
 
 			return self.serialPort.isOpen()
 
-		def emptyComPort(self):
+		def empty(self):
 			"""Empties the buffer data in the given COM port."""
 
 			self.serialPort.flushInput() #flush input buffer, discarding all its contents
 			self.serialPort.flushOutput()#flush output buffer, aborting current output and discard all that is in buffer
 
-		def closeComPort(self, port = None):
+		def close(self, port = None):
 			"""Closes the current COM Port.
 
 			### Not Yet Implemented ###
 			port (str) - If Provided, closes this port instead of the port in memory
 
-			Example Input: closeComPort()
+			Example Input: close()
 			"""
 
 			self.serialPort.close()
 
-		def comWrite(self, message = None):
+		def send(self, message = None):
 			"""Sends a message to the COM device.
 
 			message (str) - The message that will be sent to the listener
 							If None: The internally stored message will be used.
 
-			Example Input: comWrite()
-			Example Input: comWrite("Lorem ipsum")
+			Example Input: send()
+			Example Input: send("Lorem ipsum")
 			"""
 
 			if (message == None):
-				message = self.comMessage
+				message = self.message
 
 			if (message != None):
 				if self.serialPort.isOpen():
@@ -1502,54 +2103,73 @@ class Communication():
 				else:
 					warnings.warn(f"Serial port has not been opened yet for {self.__repr__()}\n Make sure that ports are available and then launch this application again", Warning, stacklevel = 2)
 			else:
-				warnings.warn(f"No message to send for comWrite() in {self.__repr__()}", Warning, stacklevel = 2)
+				warnings.warn(f"No message to send for send() in {self.__repr__()}", Warning, stacklevel = 2)
 
-		def comRead(self):
+		def read(self):
 			"""Listens to the comport for a message.
 
-			Example Input: comRead()
+			Example Input: read()
 			"""
 
 			message = self.serialPort.read()
 			# message = self.serialPort.readline()
 			return message
 
-	class Barcode():
-		"""Allows the user to create and read barcodes."""
 
-		def __init__(self):
-			"""Initializes internal variables."""
+class Barcode(Utilities_Container):
+	"""A controller for a Barcode.
+	
+	______________________ EXAMPLE USE ______________________
+	
+	com = API_Com.build()
+	barcode = com.barcode[0]
+	barcode.create("Lorem Ipsum")
+	barcode.show()
+	_________________________________________________________
+	"""
 
+	def __init__(self, parent):
+		"""Defines the internal variables needed to run."""
+
+		#Initialize Inherited Modules
+		Utilities_Container.__init__(self, parent)
+
+	def getAll(self):
+		"""Returns all connected com ports.
+		Modified code from Matt Williams on http://stackoverflow.com/questions/1205383/listing-serial-com-ports-on-windows.
+
+		Example Input: getAll()
+		"""
+
+		valueList = sorted(barcode.PROVIDED_BARCODES)# + ["qr"])
+
+		return valueList
+
+	class Child(Utilities_Child):
+		"""A COM Port connection."""
+
+		def __init__(self, parent, label):
+			"""Defines the internal variables needed to run."""
+
+			#Initialize Inherited Modules
+			Utilities_Child.__init__(self, parent, label)
+		
+			#Internal Variables
 			self.myBarcode = None
-			self.type = None
+			self.type = "code123"
 
 		def getType(self, formatted = False):
 			"""Returns the barcode type."""
 
-			if (formatted):
-				return self.getTypes(5)[self.type]
-			else:
-				return self.type
+			return self.type
 
 		def setType(self, newType):
 			"""Sets the default barcode type."""
 
-			if (newType in self.getTypes(5)):
+			if (newType in self.parent.getAll()):
 				self.type = newType
-			elif (newType in self.getTypes(4)):
-				self.type = self.getTypes(4)[newType]
 			else:
 				warnings.warn(f"Unknown type {newType} in setType() for {self.__repr__()}", Warning, stacklevel = 2)
-
-		def getTypes(self):
-			"""Returns the possible barcode types to the user as a list.
-
-			Example Input: getTypes()
-			"""
-
-			typeList = sorted(barcode.PROVIDED_BARCODES)# + ["qr"])
-
-			return typeList
 
 		def create(self, text, codeType = None, filePath = None):
 			"""Returns a PIL image of the barcode for the user or saves it somewhere as an image.
@@ -1562,19 +2182,16 @@ class Communication():
 			Example Input: create(1234567890, "code128")
 			"""
 
-			if (codeType == None):
-				codeType = self.type
-			elif (codeType not in self.getTypes()):
-				warnings.warn(f"Unknown type {codeType} in create() for {self.__repr__()}", Warning, stacklevel = 2)
-				return
+			if (codeType not in [None, self.type]):
+				self.setType(codeType)
 
 			#Create barcode
-			if (codeType == "qr"):
+			if (self.type == "qr"):
 				#https://ourcodeworld.com/articles/read/554/how-to-create-a-qr-code-image-or-svg-in-python
 				self.myBarcode = None
 				pass
 			else:
-				thing = barcode.get(codeType, f"{text}", writer = barcode.writer.ImageWriter())
+				thing = barcode.get(self.type, f"{text}", writer = barcode.writer.ImageWriter())
 				self.myBarcode = thing.render(writer_options = None)
 
 				if (filePath != None):
@@ -1591,3 +2208,30 @@ class Communication():
 			"""Returns the barcode."""
 
 			return self.myBarcode
+
+class Communication():
+	"""Helps the user to communicate with other devices.
+
+	CURRENTLY SUPPORTED METHODS
+		- COM Port (RS-232)
+		- Ethernet & Wi-fi
+		- Barcode
+		- USB
+
+	UPCOMING SUPPORTED METHODS
+		- Raspberry Pi GPIO
+		- QR Code
+
+	Example Input: Communication()
+	"""
+
+	def __init__(self):
+		"""Initialized internal variables."""
+
+		self.ethernet = Ethernet(self)
+		self.barcode = Barcode(self)
+		self.comPort = ComPort(self)
+		self.usb = USB(self)
+
+if __name__ == '__main__':
+	com = build()

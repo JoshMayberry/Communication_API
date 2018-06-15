@@ -1,8 +1,9 @@
 __version__ = "1.0.0"
 
 #Import standard elements
-import threading
 import warnings
+import traceback
+import threading
 import subprocess
 
 #Import communication elements for talking to other devices such as printers, the internet, a raspberry pi, etc.
@@ -605,7 +606,7 @@ class Utilities_Container(Utilities_Base):
 			- If None: Will select the current child
 
 		Example Input: remove()
-		Example Input: remove("Guest")
+		Example Input: remove(0)
 		"""
 
 		if (child == None):
@@ -622,7 +623,7 @@ class Utilities_Container(Utilities_Base):
 			- If None: Will select the default child
 
 		Example Input: select()
-		Example Input: select("Guest")
+		Example Input: select(0)
 		"""
 
 		if (child == None):
@@ -634,14 +635,20 @@ class Utilities_Container(Utilities_Base):
 
 class Utilities_Child(Utilities_Base):
 	def __init__(self, parent, label):
-		"""Utility functions that only widget classes get."""
+		"""Utility functions that only child classes get."""
 
 		#Internal Variables
 		if (not hasattr(self, "label")): self.label = label
 		if (not hasattr(self, "parent")): self.parent = parent
 		if (not hasattr(self, "root")): self.root = self.parent.root
-		
+
 		#Nest in parent
+		if (self.label == None):
+			self.label = 0
+			while True:
+				if (self.label not in self.parent):
+					break
+				self.label += 1
 		self.parent[self.label] = self
 
 		#Initialize Inherited Modules
@@ -1023,13 +1030,13 @@ class Ethernet(Utilities_Container):
 
 			#Background thread variables
 			self.dataBlock   = [] #Used to recieve data from the socket
-			self.clientDict  = {} #Used to keep track of all client connections {"mySocket": connection object (socket), "data": client dataBlock (str), "stop": stop flag (bool), "listening": currently listening flag, "finished": recieved all flag}
+			self.clientDict  = {} #Used to keep track of all client connections {"device": connection object (socket), "data": client dataBlock (str), "stop": stop flag (bool), "listening": currently listening flag, "finished": recieved all flag}
 
 			self.recieveStop = False #Used to stop the recieving function early
 			self.recieveListening = False #Used to chek if the recieve function has started listening or if it has finished listeing
 
 			#Create the socket
-			self.mySocket = None #Rename this to device
+			self.device = None
 			self.stream = None
 			self.address = None
 			self.port = None
@@ -1055,16 +1062,16 @@ class Ethernet(Utilities_Container):
 			Example Input: open("www.example.com")
 			"""
 
-			if (self.mySocket != None):
+			if (self.device != None):
 				warnings.warn(f"Socket already opened", Warning, stacklevel = 2)
 
 			#Account for the socket having been closed
-			# if (self.mySocket == None):
+			# if (self.device == None):
 			if (stream):
-				self.mySocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+				self.device = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 				self.stream = "SOCK_STREAM"
 			else:
-				self.mySocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+				self.device = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 				self.stream = "SOCK_DGRAM"
 
 			if (timeout != -1):
@@ -1079,7 +1086,7 @@ class Ethernet(Utilities_Container):
 
 				if (not addressExists):
 					print(f"Cannot ping address {address}")
-					self.mySocket = None
+					self.device = None
 					return False
 
 			#Remember Values
@@ -1089,10 +1096,10 @@ class Ethernet(Utilities_Container):
 			#Connect to the socket
 			if (stream):
 				if (error):
-					error = self.mySocket.connect_ex((address, port))
+					error = self.device.connect_ex((address, port))
 					return error
 				else:
-					self.mySocket.connect((address, port))
+					self.device.connect((address, port))
 
 			#Finish
 			if (pingCheck):
@@ -1113,7 +1120,7 @@ class Ethernet(Utilities_Container):
 			Example Input: close(None)
 			"""
 
-			if (self.mySocket == None):
+			if (self.device == None):
 				warnings.warn(f"Socket already closed", Warning, stacklevel = 2)
 				return
 
@@ -1121,11 +1128,11 @@ class Ethernet(Utilities_Container):
 				if (now):
 					self.restrict()
 
-				self.mySocket.close()
+				self.device.close()
 			else:
-				self.mySocket.detach()
+				self.device.detach()
 
-			self.mySocket = None
+			self.device = None
 
 		def send(self, data):
 			"""Sends data across the socket connection.
@@ -1146,10 +1153,10 @@ class Ethernet(Utilities_Container):
 
 			#Send the data
 			if (self.stream == "SOCK_DGRAM"):
-				self.mySocket.sendto(data, (self.address, self.port))
+				self.device.sendto(data, (self.address, self.port))
 			else:
-				self.mySocket.sendall(data)
-				# self.mySocket.send(data)
+				self.device.sendall(data)
+				# self.device.send(data)
 
 		def startRecieve(self, bufferSize = 256, scanDelay = 500):
 			"""Retrieves data from the socket connection.
@@ -1171,20 +1178,20 @@ class Ethernet(Utilities_Container):
 				#Listen
 				while True:
 					#Check for stop command
-					if (self.recieveStop or (self.mySocket == None)):# or ((len(self.dataBlock) > 0) and (self.dataBlock[-1] == None))):
+					if (self.recieveStop or (self.device == None)):# or ((len(self.dataBlock) > 0) and (self.dataBlock[-1] == None))):
 						self.recieveStop = False
 						break
 
 					#Check for data to recieve
-					self.mySocket.setblocking(0)
-					ready = select.select([self.mySocket], [], [], 0.5)
+					self.device.setblocking(0)
+					ready = select.select([self.device], [], [], 0.5)
 					if (not ready[0]):
 						#Stop listening
 						break
 
 					#Retrieve the block of data
-					data = self.mySocket.recv(bufferSize).decode() #The .decode is needed for python 3.4, but not for python 2.7
-					# data, address = self.mySocket.recvfrom(bufferSize)#.decode() #The .decode is needed for python 3.4, but not for python 2.7
+					data = self.device.recv(bufferSize).decode() #The .decode is needed for python 3.4, but not for python 2.7
+					# data, address = self.device.recvfrom(bufferSize)#.decode() #The .decode is needed for python 3.4, but not for python 2.7
 
 					#Check for end of data stream
 					if (len(data) < 1):
@@ -1290,16 +1297,16 @@ class Ethernet(Utilities_Container):
 				self.address = address
 				self.port = port
 
-				self.mySocket.bind(serverIp)
+				self.device.bind(serverIp)
 
 				#Listen for incoming connections
-				self.mySocket.listen(clients)
+				self.device.listen(clients)
 				count = clients #How many clients still need to connect
 				clientIp = None
 				while True:
 					# Wait for a connection
 					try:
-						connection, clientIp = self.mySocket.accept()
+						connection, clientIp = self.device.accept()
 					except:
 						traceback.print_exc()
 						if (clientIp != None):
@@ -1314,14 +1321,14 @@ class Ethernet(Utilities_Container):
 					if (clientIp != None):
 						#Catalogue client
 						if (clientIp not in self.clientDict):
-							self.clientDict[clientIp] = {"mySocket": connection, "data": "", "stop": False, "listening": False, "finished": False}
+							self.clientDict[clientIp] = {"device": connection, "data": "", "stop": False, "listening": False, "finished": False}
 						else:
 							warnings.warn(f"Client {clientIp} recieved again", Warning, stacklevel = 2)
 
 					time.sleep(scanDelay / 1000)
 
 			#Error Checking
-			self.mySocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+			self.device = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 			#Listen for data on a separate thread
 			self.backgroundRun(runFunction)
@@ -1345,7 +1352,7 @@ class Ethernet(Utilities_Container):
 				data = data.encode() #The .encode() is needed for python 3.4, but not for python 2.7
 
 			#Send the data
-			client = self.clientDict[clientIp]["mySocket"]
+			client = self.clientDict[clientIp]["device"]
 			client.sendall(data)
 
 			# if (logoff):
@@ -1372,7 +1379,7 @@ class Ethernet(Utilities_Container):
 				self.clientDict[clientIp]["listening"] = True
 
 				#Listen
-				client = self.clientDict[clientIp]["mySocket"]
+				client = self.clientDict[clientIp]["device"]
 				while True:
 					#Check for stop command
 					if (self.clientDict[clientIp]["stop"]):
@@ -1467,7 +1474,7 @@ class Ethernet(Utilities_Container):
 			if (clientIp not in self.clientDict):
 				warnings.warn(f"There is no client {clientIp} for this server", Warning, stacklevel = 2)
 			else:
-				client = self.clientDict[clientIp]["mySocket"]
+				client = self.clientDict[clientIp]["device"]
 				client.close()
 				del(self.clientDict[clientIp])
 
@@ -1488,16 +1495,16 @@ class Ethernet(Utilities_Container):
 			"""
 
 			if (how == "rw"):
-				self.mySocket.shutdown(socket.SHUT_RDWR)
+				self.device.shutdown(socket.SHUT_RDWR)
 
 			elif (how == "r"):
-				self.mySocket.shutdown(socket.SHUT_RD)
+				self.device.shutdown(socket.SHUT_RD)
 
 			elif (how == "w"):
-				self.mySocket.shutdown(socket.SHUT_WR)
+				self.device.shutdown(socket.SHUT_WR)
 
 			elif (how == "b"):
-				self.mySocket.setblocking(False)
+				self.device.setblocking(False)
 
 			else:
 				warnings.warn(f"Unknown restiction flag {how}", Warning, stacklevel = 2)
@@ -1516,19 +1523,19 @@ class Ethernet(Utilities_Container):
 			"""
 
 			if (how == "rw"):
-				# self.mySocket.shutdown(socket.SHUT_RDWR)
+				# self.device.shutdown(socket.SHUT_RDWR)
 				pass
 
 			elif (how == "r"):
-				# self.mySocket.shutdown(socket.SHUT_RD)
+				# self.device.shutdown(socket.SHUT_RD)
 				pass
 
 			elif (how == "w"):
-				# self.mySocket.shutdown(socket.SHUT_WR)
+				# self.device.shutdown(socket.SHUT_WR)
 				pass
 
 			elif (how == "b"):
-				self.mySocket.setblocking(True)
+				self.device.setblocking(True)
 
 			else:
 				warnings.warn(f"Unknown unrestiction flag {how}", Warning, stacklevel = 2)
@@ -1540,7 +1547,7 @@ class Ethernet(Utilities_Container):
 			Example Input: getTimeout()
 			"""
 
-			timeout = self.mySocket.gettimeout()
+			timeout = self.device.gettimeout()
 			return timeout
 
 		def setTimeout(self, timeout):
@@ -1559,7 +1566,7 @@ class Ethernet(Utilities_Container):
 					warnings.warn(f"Timeout cannot be negative for setTimeout() in {self.__repr__()}", Warning, stacklevel = 2)
 					return
 
-			self.mySocket.settimeout(timeout)
+			self.device.settimeout(timeout)
 
 		def getAddress(self, mine = False):
 			"""Returns either the socket address or the remote address.
@@ -1572,22 +1579,22 @@ class Ethernet(Utilities_Container):
 			"""
 
 			if (mine):
-				address = self.mySocket.getsockname()
+				address = self.device.getsockname()
 			else:
-				address = self.mySocket.getpeername()
+				address = self.device.getpeername()
 
 			return address
 
 		def isOpen(self, address = None):
 			"""Returns if a socket is already open."""
 
-			# error = self.mySocket.connect_ex((address, port))
+			# error = self.device.connect_ex((address, port))
 			# if (error == 0):
-			#   self.mySocket.shutdown(2)
+			#   self.device.shutdown(2)
 			#   return True
 			# return False
 
-			if (self.mySocket == None):
+			if (self.device == None):
 				return True
 			return False
 
@@ -1651,7 +1658,7 @@ class ComPort(Utilities_Container):
 			Utilities_Child.__init__(self, parent, label)
 		
 			#Internal Variables
-			self.serialPort = serial.Serial() #Change this to device
+			self.device = serial.Serial()
 
 			#These are the defaults for serial.Serial.__init__()
 			self.port         = None                #The device name
@@ -1934,32 +1941,38 @@ class ComPort(Utilities_Container):
 			else:
 				warnings.warn(f"There is no stop bit {value} for {self.__repr__()}", Warning, stacklevel = 2)
 
-		def setTimeoutRead(self, value):
+		def setTimeout(self, value = None):
+			"""Runs setTimeoutRead and setTimeoutWrite().
+
+			Example Input: setTimeout()
+			Example Input: setTimeout(1000)
+			"""
+
+			self.setTimeoutRead(value)
+			self.setTimeoutWrite(value)
+
+		def setTimeoutRead(self, value = None):
 			"""Changes the read timeout.
 
-			value (int) - The new read timeout
-						  None: Wait forever
-						  0: Do not wait
-						  Any positive int or float: How many seconds to wait
+			value (int) - How many milli-seconds to wait for read()
+				- If None: Wait forever
+				- If 0: Do not wait
 
-			Example Input: setTimeoutRead(None)
-			Example Input: setTimeoutRead(1)
-			Example Input: setTimeoutRead(2)
+			Example Input: setTimeoutRead()
+			Example Input: setTimeoutRead(1000)
 			"""
 
 			self.timeoutRead = value
 
-		def setTimeoutWrite(self, value):
+		def setTimeoutWrite(self, value = None):
 			"""Changes the write timeout.
 
-			value (int) - The new write timeout
-						  None: Wait forever
-						  0: Do not wait
-						  Any positive int or float: How many seconds to wait
+			value (int) - How many milli-seconds to wait for write()
+				- If None: Wait forever
+				- If 0: Do not wait
 
-			Example Input: setTimeoutWrite(None)
-			Example Input: setTimeoutWrite(1)
-			Example Input: setTimeoutWrite(2)
+			Example Input: setTimeoutWrite()
+			Example Input: setTimeoutWrite(1000)
 			"""
 
 			self.timeoutWrite = value
@@ -2004,60 +2017,65 @@ class ComPort(Utilities_Container):
 
 			self.message = value
 
-		def open(self, port = None):
+		def open(self, port = None, autoEmpty = True):
 			"""Gets the COM port that the zebra printer is plugged into and opens it.
 			Returns True if the port sucessfully opened.
 			Returns False if the port failed to open.
 
-			### Untested ###
 			port (str) - If Provided, opens this port instead of the port in memory
+			autoEmpty (bool) - Determines if the comPort is automatically flushed after opening
 
 			Example Input: open()
 			Example Input: open("COM2")
+			Example Input: open(autoEmpty = False)
 			"""
 
 			#Configure port options
 			if (port != None):
-				self.serialPort.port     = port
+				self.device.port     = port
 			else:
-				self.serialPort.port     = self.port
+				self.device.port     = self.port
 
-			self.serialPort.baudrate     = self.baudRate
-			self.serialPort.bytesize     = self.byteSize
-			self.serialPort.parity       = self.parity
-			self.serialPort.stopbits     = self.stopBits
-			self.serialPort.timeout      = self.timeoutRead
-			self.serialPort.writeTimeout = self.timeoutWrite
-			self.serialPort.xonxoff      = self.flowControl
-			self.serialPort.rtscts       = self.rtsCts
-			self.serialPort.dsrdtr       = self.dsrDtr
+			self.device.baudrate     = self.baudRate
+			self.device.bytesize     = self.byteSize
+			self.device.parity       = self.parity
+			self.device.stopbits     = self.stopBits
+			self.device.timeout      = self.timeoutRead / 1000
+			self.device.writeTimeout = self.timeoutWrite / 1000
+			self.device.xonxoff      = self.flowControl
+			self.device.rtscts       = self.rtsCts
+			self.device.dsrdtr       = self.dsrDtr
+
+			if (self.isOpen()):
+				self.close()
 
 			#Open the port
 			try:
-				self.serialPort.open()
-			except:
-				traceback.print_exc()
-				warnings.warn(f"Cannot find serial port {self.serialPort.port} for {self.__repr__()}", Warning, stacklevel = 2)
-				return False
+				self.device.open()
+			except socket.error as error:
+				return error
 
 			#Check port status
-			if self.serialPort.isOpen():
-				# print(f"Serial port {self.serialPort.port} sucessfully opened")
-				return True
-			else:
-				warnings.warn(f"Cannot open serial port {self.serialPort.port} for {self.__repr__()}", Warning, stacklevel = 2)
-				return False
+			if (not self.isOpen()):
+				error = ValueError(f"Cannot open serial port {self.device.port} for {self.__repr__()}")
+				return error
+
+			if (autoEmpty):
+				self.empty()
 
 		def isOpen(self):
 			"""Checks whether the COM port is open or not."""
 
-			return self.serialPort.isOpen()
+			return self.device.isOpen()
 
 		def empty(self):
 			"""Empties the buffer data in the given COM port."""
 
-			self.serialPort.flushInput() #flush input buffer, discarding all its contents
-			self.serialPort.flushOutput()#flush output buffer, aborting current output and discard all that is in buffer
+			if (not self.isOpen()):
+				warnings.warn(f"Serial port has not been opened yet for {self.__repr__()}\n Make sure that ports are available and then launch this application again", Warning, stacklevel = 2)
+				
+			self.device.flushInput() #flush input buffer, discarding all its contents
+			self.device.flushOutput()#flush output buffer, aborting current output and discard all that is in buffer
 
 		def close(self, port = None):
 			"""Closes the current COM Port.
@@ -2068,9 +2086,13 @@ class ComPort(Utilities_Container):
 			Example Input: close()
 			"""
 
-			self.serialPort.close()
+			if (not self.isOpen()):
+				warnings.warn(f"Serial port has not been opened yet for {self.__repr__()}\n Make sure that ports are available and then launch this application again", Warning, stacklevel = 2)
+				return
 
-		def send(self, message = None):
+			self.device.close()
+
+		def send(self, message = None, autoEmpty = True):
 			"""Sends a message to the COM device.
 
 			message (str) - The message that will be sent to the listener
@@ -2083,38 +2105,91 @@ class ComPort(Utilities_Container):
 			if (message == None):
 				message = self.message
 
-			if (message != None):
-				if self.serialPort.isOpen():
-					#Ensure the buffer is empty
-					self.serialPort.flushInput() #flush input buffer, discarding all its contents
-					self.serialPort.flushOutput()#flush output buffer, aborting current output and discard all that is in buffer
-
-					if (type(message) == str):
-						#Convert the string to bytes
-						unicodeString = message
-						unicodeString = unicodeString.encode("utf-8")
-					else:
-						#The user gave a unicode string already
-						unicodeString = message
-
-					#write data
-					self.serialPort.write(unicodeString)
-					print("Wrote:", message)
-				else:
-					warnings.warn(f"Serial port has not been opened yet for {self.__repr__()}\n Make sure that ports are available and then launch this application again", Warning, stacklevel = 2)
-			else:
+			if (message == None):
 				warnings.warn(f"No message to send for send() in {self.__repr__()}", Warning, stacklevel = 2)
+				return
+			
+			if (not self.isOpen()):
+				warnings.warn(f"Serial port has not been opened yet for {self.__repr__()}\n Make sure that ports are available and then launch this application again", Warning, stacklevel = 2)
+				return
 
-		def read(self):
+			if (autoEmpty):
+				self.empty()
+
+			if (type(message) == str):
+				#Convert the string to bytes
+				unicodeString = message
+				unicodeString = unicodeString.encode("utf-8")
+			else:
+				#The user gave a unicode string already
+				unicodeString = message
+
+			#write data
+			self.device.write(unicodeString)
+
+		def read(self, length = None, end = None, decode = True, lines = 1):
 			"""Listens to the comport for a message.
 
+			length (int) - How long the string is expected to be
+
+			end (str) - What to listen for as an end of message
+				- If None: Will return the first character in the buffer
+
+			decode (bool) - Determines if the sring should be automatically decoded
+				- If True: Will decode the string
+				- If False: Will not decode the string
+
+			lines (int) - How many lines to read that end with 'end'
+				- Does not apply if 'end' is None
+
 			Example Input: read()
+			Example Input: read(10000)
+			Example Input: read(end = "\n")
 			"""
 
-			message = self.serialPort.read()
-			# message = self.serialPort.readline()
-			return message
+			if (not self.isOpen()):
+				warnings.warn(f"Serial port has not been opened yet for {self.__repr__()}\n Make sure that ports are available and then launch this application again", Warning, stacklevel = 2)
+				return
 
+			if (end == None):
+				if (length == None):
+					length = 1
+				message = self.device.read(length)
+			elif (end == "\n"):
+				if (lines <= 1):
+					if (length == None):
+						length = -1
+					message = self.device.readline(length)
+				else:
+					message = self.device.readlines(lines)
+			else:
+				message = b""
+
+				if (not isinstance(end, bytes)):
+					end = end.encode("utf-8")
+				if (length == None):
+					length = 1
+
+				linesRead = 0
+				while True:
+					while True:
+						if (not self.isOpen()):
+							return
+
+						value = self.device.read(length)
+						message += value
+						print("@1", message)
+						if (end in value):
+							linesRead += 1
+							break
+					
+					if (linesRead >= lines):
+						break
+
+			if (decode):
+				message = message.decode("utf-8")
+
+			return message
 
 class Barcode(Utilities_Container):
 	"""A controller for a Barcode.
@@ -2155,7 +2230,8 @@ class Barcode(Utilities_Container):
 			Utilities_Child.__init__(self, parent, label)
 		
 			#Internal Variables
-			self.myBarcode = None
+			self.device = None
+			self.image = None
 			self.type = "code123"
 
 		def getType(self, formatted = False):
@@ -2188,32 +2264,32 @@ class Barcode(Utilities_Container):
 			#Create barcode
 			if (self.type == "qr"):
 				#https://ourcodeworld.com/articles/read/554/how-to-create-a-qr-code-image-or-svg-in-python
-				self.myBarcode = None
+				self.device = None
 				pass
 			else:
-				thing = barcode.get(self.type, f"{text}", writer = barcode.writer.ImageWriter())
-				self.myBarcode = thing.render(writer_options = None)
+				self.device = barcode.get(self.type, f"{text}", writer = barcode.writer.ImageWriter())
+				self.image = self.device.render(writer_options = None)
 
 				if (filePath != None):
-					thing.save(filePath)
+					self.device.save(filePath)
 
-			return self.myBarcode
+			return self.image
 
 		def show(self):
 			"""Shows the barcode to the user."""
 
-			self.myBarcode.show()
+			self.image.show()
 
 		def get(self):
 			"""Returns the barcode."""
 
-			return self.myBarcode
+			return self.image
 
 class Communication():
 	"""Helps the user to communicate with other devices.
 
 	CURRENTLY SUPPORTED METHODS
-		- COM Port (RS-232)
+		- COM Port
 		- Ethernet & Wi-fi
 		- Barcode
 		- USB
@@ -2232,6 +2308,30 @@ class Communication():
 		self.barcode = Barcode(self)
 		self.comPort = ComPort(self)
 		self.usb = USB(self)
+
+	def __str__(self):
+		"""Gives diagnostic information on the GUI when it is printed out."""
+
+		output = f"Communication()\n-- id: {id(self)}\n"
+
+		output += f"-- Ethernets: {len(self.ethernet)}\n"
+		output += f"-- COM Ports: {len(self.comPort)}\n"
+		output += f"-- USB Ports: {len(self.usb)}\n"
+		output += f"-- Barcodes: {len(self.barcode)}\n"
+
+		return output
+
+	def __repr__(self):
+		representation = f"Communication(id = {id(self)})"
+		return representation
+
+	def getAll(self):
+		"""Returns all available communication types.
+
+		Example Input: getAll()
+		"""
+
+		return [self.ethernet, self.comPort, self.usb, self.barcode]
 
 if __name__ == '__main__':
 	com = build()

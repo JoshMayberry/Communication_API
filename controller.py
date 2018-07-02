@@ -8,6 +8,7 @@ import subprocess
 
 #Import communication elements for talking to other devices such as printers, the internet, a raspberry pi, etc.
 import usb
+import bisect
 import select
 import socket
 import serial
@@ -568,6 +569,46 @@ class Utilities_Base():
 				raise ValueError(errorMessage)
 
 		return myFunctionEvaluated, myFunctionArgs, myFunctionKwargs
+
+	def getClosest(myList, number, returnLower = True, autoSort = False):
+		"""Returns the closest number in 'myList' to 'number'
+		Assumes myList is sorted.
+		Modified Code from: Lauritz V. Thaulow on https://stackoverflow.com/questions/12141150/from-list-of-integers-get-number-closest-to-a-given-value
+
+		myList (list) - The list to look through
+		number (int)  - The number to search with
+		returnLower (bool) - Determines what happens if 'number' is equadistant from the left and right bound.
+			- If True: Returns the left bound
+			- If False: Returns the right bound
+		autoSort (bool) - Determines if the list should be sorted before checking
+			- If True: Ensures the list is sorted
+			- If False: Assumes the list is sorted already
+
+		Example Input: getClosest([7, 15, 25, 30], 20))
+		"""
+
+		if (autoSort):
+			myList = sorted(myList)
+
+		position = bisect.bisect_left(myList, number)
+		if (position == 0):
+			answer = myList[0]
+
+		elif (position == len(myList)):
+			answer = myList[-1]
+
+		else:
+			before = myList[position - 1]
+			after = myList[position]
+
+			if (after - number < number - before):
+				answer = after
+			elif (returnLower):
+				answer = before
+			else:
+				answer = after
+
+		return answer
 
 class Utilities_Container(Utilities_Base):
 	def __init__(self, parent):
@@ -2040,11 +2081,19 @@ class ComPort(Utilities_Container):
 			self.device.bytesize     = self.byteSize
 			self.device.parity       = self.parity
 			self.device.stopbits     = self.stopBits
-			self.device.timeout      = self.timeoutRead / 1000
-			self.device.writeTimeout = self.timeoutWrite / 1000
 			self.device.xonxoff      = self.flowControl
 			self.device.rtscts       = self.rtsCts
 			self.device.dsrdtr       = self.dsrDtr
+
+			if (self.timeoutRead == None):
+				self.device.timeout = None
+			else:
+				self.device.timeout = self.timeoutRead / 1000
+
+			if (self.timeoutWrite == None):
+				self.device.writeTimeout = None
+			else:
+				self.device.writeTimeout = self.timeoutWrite / 1000
 
 			if (self.isOpen()):
 				self.close()
@@ -2116,18 +2165,13 @@ class ComPort(Utilities_Container):
 			if (autoEmpty):
 				self.empty()
 
-			if (type(message) == str):
-				#Convert the string to bytes
-				unicodeString = message
-				unicodeString = unicodeString.encode("utf-8")
-			else:
-				#The user gave a unicode string already
-				unicodeString = message
+			if (not isinstance(message, bytes)):
+				message = message.encode("utf-8")
 
 			#write data
-			self.device.write(unicodeString)
+			self.device.write(message)
 
-		def read(self, length = None, end = None, decode = True, lines = 1):
+		def read(self, length = None, end = None, decode = True, lines = 1, reply = None):
 			"""Listens to the comport for a message.
 
 			length (int) - How long the string is expected to be
@@ -2142,6 +2186,8 @@ class ComPort(Utilities_Container):
 			lines (int) - How many lines to read that end with 'end'
 				- Does not apply if 'end' is None
 
+			reply (str) - What to send back after recieving the full message
+
 			Example Input: read()
 			Example Input: read(10000)
 			Example Input: read(end = "\n")
@@ -2150,6 +2196,10 @@ class ComPort(Utilities_Container):
 			if (not self.isOpen()):
 				warnings.warn(f"Serial port has not been opened yet for {self.__repr__()}\n Make sure that ports are available and then launch this application again", Warning, stacklevel = 2)
 				return
+
+			if (reply != None):
+				if (not isinstance(reply, bytes)):
+					reply = reply.encode("utf-8")
 
 			if (end == None):
 				if (length == None):
@@ -2186,6 +2236,9 @@ class ComPort(Utilities_Container):
 					if (linesRead >= lines):
 						break
 
+			if (reply != None):
+				self.device.write(reply)
+
 			if (decode):
 				message = message.decode("utf-8")
 
@@ -2210,13 +2263,12 @@ class Barcode(Utilities_Container):
 		Utilities_Container.__init__(self, parent)
 
 	def getAll(self):
-		"""Returns all connected com ports.
-		Modified code from Matt Williams on http://stackoverflow.com/questions/1205383/listing-serial-com-ports-on-windows.
+		"""Returns all barcoder formats.
 
 		Example Input: getAll()
 		"""
 
-		valueList = sorted(barcode.PROVIDED_BARCODES)# + ["qr"])
+		valueList = sorted(barcode.PROVIDED_BARCODES + ["qr"])
 
 		return valueList
 
@@ -2234,6 +2286,15 @@ class Barcode(Utilities_Container):
 			self.image = None
 			self.type = "code123"
 
+			#Barcode Attributes
+			self.size = None
+			self.pixelSize = None
+			self.borderSize = None
+			self.correction = None
+			self.color_foreground = None
+			self.color_background = None
+			self.qrcode_correctionCatalogue = {7: qrcode.constants.ERROR_CORRECT_L, 15: qrcode.constants.ERROR_CORRECT_M, 25: qrcode.constants.ERROR_CORRECT_Q, 30: qrcode.constants.ERROR_CORRECT_H}
+
 		def getType(self, formatted = False):
 			"""Returns the barcode type."""
 
@@ -2247,8 +2308,78 @@ class Barcode(Utilities_Container):
 			else:
 				warnings.warn(f"Unknown type {newType} in setType() for {self.__repr__()}", Warning, stacklevel = 2)
 
+		def setCorrection(self, percent = 15):
+			"""Sets the max amount that can be error correctted.
+
+			percent (int) - How much can be correctted as a percentage
+				~ 7, 15, 25, 30
+
+			Example Input: setCorrection()
+			Example Input: setCorrection(30)
+			"""
+
+			if (percent not in [7, 15, 25, 30]):
+				percent = self.getClosest([7, 15, 25, 30], percent)
+
+			self.correction = self.qrcode_correctionCatalogue[percent]
+
+		def setSize(self, number = None):
+			"""Must be between 1 and 40.
+
+			Example Input: setSize()
+			Example Input: setSize(5)
+			"""
+
+			if (number not in [None, range(1, 40)]):
+				number = self.getClosest(range(1, 40), number)
+
+			self.size = number
+
+		def setPixelSize(self, number = None):
+			"""How large the boxes in the QR code are.
+
+			Example Input: setPixelSize()
+			Example Input: setPixelSize(5)
+			"""
+
+			if (number == None):
+				number = 10
+
+			self.pixelSize = number
+
+		def setBorderSize(self, number = None):
+			"""How wide the border is.
+
+			Example Input: setBorderSize()
+			Example Input: setBorderSize(5)
+			"""
+
+			if (number == None):
+				number = 4
+
+			self.borderSize = number
+
+		def setColor(self, foreground = None, background = None):
+			"""What color the barcode will be.
+
+			foreground (str) - Color of the foreground
+			background (str) - Color of the background
+
+			Example Input: setColor()
+			Example Input: setColor("red", "blue")
+			"""
+
+			if (foreground == None):
+				foreground = "black"
+			if (background == None):
+				background = "white"
+
+			self.color_foreground = foreground
+			self.color_background = background
+
 		def create(self, text, codeType = None, filePath = None):
 			"""Returns a PIL image of the barcode for the user or saves it somewhere as an image.
+			Use: https://ourcodeworld.com/articles/read/554/how-to-create-a-qr-code-image-or-svg-in-python
 
 			text (str)     - What the barcode will say
 			codeType (str) - What type of barcode will be made
@@ -2263,9 +2394,28 @@ class Barcode(Utilities_Container):
 
 			#Create barcode
 			if (self.type == "qr"):
-				#https://ourcodeworld.com/articles/read/554/how-to-create-a-qr-code-image-or-svg-in-python
-				self.device = None
-				pass
+				if (self.correction == None):
+					self.correction = qrcode.constants.ERROR_CORRECT_M
+				if (self.pixelSize == None):
+					self.pixelSize = 10
+				if (self.borderSize == None):
+					self.borderSize = 4
+				if (self.color_foreground == None):
+					self.color_foreground = "black"
+				if (self.color_background == None):
+					self.color_background = "white"
+
+				self.device = qrcode.QRCode(version = self.size,
+					error_correction = self.correction,
+					box_size = self.pixelSize, 
+					border = self.borderSize,
+					image_factory = None,
+					mask_pattern = None)
+
+				self.device.add_data(f"{text}")
+				self.device.make(fit = True)
+				self.image = self.device.make_image(fill_color = self.color_foreground, back_color = self.color_background)
+
 			else:
 				self.device = barcode.get(self.type, f"{text}", writer = barcode.writer.ImageWriter())
 				self.image = self.device.render(writer_options = None)

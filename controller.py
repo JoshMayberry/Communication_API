@@ -8,6 +8,7 @@ import subprocess
 
 #Import communication elements for talking to other devices such as printers, the internet, a raspberry pi, etc.
 import usb
+import types
 import bisect
 import select
 import socket
@@ -1641,6 +1642,7 @@ class Ethernet(Utilities_Container):
 
 class ComPort(Utilities_Container):
 	"""A controller for a ComPort connection.
+	Use: https://pyserial.readthedocs.io/en/latest/pyserial_api.html#module-serial.threaded
 	
 	______________________ EXAMPLE USE ______________________
 	
@@ -1678,14 +1680,40 @@ class ComPort(Utilities_Container):
 		#Initialize Inherited Modules
 		Utilities_Container.__init__(self, parent)
 
-	def getAll(self):
+	def getAll(self, include = [], exclude = [], portOnly = False):
 		"""Returns all connected com ports.
 		Modified code from Matt Williams on http://stackoverflow.com/questions/1205383/listing-serial-com-ports-on-windows.
 
 		Example Input: getAll()
+		Example Input: getAll(portOnly = True)
+		Example Input: getAll(include = ["vendorId", "productId"])
+		Example Input: getAll(exclude = ["serial", "description"])
 		"""
 
-		valueList = [item.device for item in serial.tools.list_ports.comports()]
+		if (include == None):
+			include = []
+		elif (not isinstance(include, (list, tuple, types.GeneratorType))):
+			include = [include]
+
+		if (exclude == None):
+			exclude = []
+		elif (not isinstance(exclude, (list, tuple, types.GeneratorType))):
+			exclude = [exclude]
+
+		valueList = []
+		catalogue = {"port": "device", "name": "name", "description": "description", "hwid": "hwid", 
+			"vendorId": "vid", "productId": "pid", "serial": "serial_number", "location": "location", 
+			"manufacturer": "manufacturer", "product": "product", "interface": "interface"}
+
+		for item in serial.tools.list_ports.comports():
+			if (portOnly):
+				valueList.append(item.device)
+			else:
+				info = {}
+				for key, variable in catalogue.items():
+					if (((len(include) == 0) or (key in include)) and ((len(exclude) == 0) or (key not in exclude))):
+						info[key] = getattr(item, variable)
+				valueList.append(info)
 
 		return valueList
 
@@ -1702,7 +1730,7 @@ class ComPort(Utilities_Container):
 			self.device = serial.Serial()
 
 			#These are the defaults for serial.Serial.__init__()
-			self.port         = None                #The device name
+			self.port         = None                #The device name or (vendor id (int), product id (int))
 			self.baudRate     = 9600                #Rate at which information is transferred
 			self.byteSize     = serial.EIGHTBITS    #Number of bits per bytes
 			self.parity       = serial.PARITY_NONE  #For error detection
@@ -1713,6 +1741,8 @@ class ComPort(Utilities_Container):
 			self.rtsCts       = False               #Hardware (RTS/CTS) flow control
 			self.dsrDtr       = False               #Hardware (DSR/DTR) flow control
 			self.message      = None                #What is sent to the listener
+			self.vendorId     = None
+			self.productId    = None
 
 		def __exit__(self, exc_type, exc_value, traceback):
 			"""Allows the user to use a with statement to make sure the socket connection gets closed after use."""
@@ -1857,6 +1887,14 @@ class ComPort(Utilities_Container):
 			"""
 
 			return self.message
+
+		def getId(self):
+			"""Returns the product id and vendor id of the device connected to the COM Port.
+
+			Example Input: getId()
+			"""
+
+			return (self.vendorId, self.productId)
 
 		#Setters
 		def setPort(self, value):
@@ -2062,6 +2100,7 @@ class ComPort(Utilities_Container):
 			"""Gets the COM port that the zebra printer is plugged into and opens it.
 			Returns True if the port sucessfully opened.
 			Returns False if the port failed to open.
+			Special thanks to Mike Molt for how tos earch by vendor id and product id on https://stackoverflow.com/questions/38661797/is-it-possible-to-refer-to-a-serial-device-by-vendor-and-device-id-in-pyserial
 
 			port (str) - If Provided, opens this port instead of the port in memory
 			autoEmpty (bool) - Determines if the comPort is automatically flushed after opening
@@ -2069,14 +2108,47 @@ class ComPort(Utilities_Container):
 			Example Input: open()
 			Example Input: open("COM2")
 			Example Input: open(autoEmpty = False)
+			Example Input: open((1529, 16900))
 			"""
 
-			#Configure port options
-			if (port != None):
-				self.device.port     = port
-			else:
-				self.device.port     = self.port
+			if (port == None):
+				port = self.port
+				if (port == None):
+					errorMessage = f"'port' cannot be None for open() in {self.__repr__()}"
+					raise ValueError(errorMessage)
 
+			if (isinstance(port, (tuple, list, range, types.GeneratorType))):
+				if (len(port) != 2):
+					errorMessage = f"'port' should have a length of 2, not {len(port)} for open() in {self.__repr__()}"
+					raise ValueError(errorMessage)
+
+				self.vendorId = port[0]
+				self.productId = port[1]
+				port = None
+			else:
+				self.vendorId = None
+				self.productId = None
+
+			for item in serial.tools.list_ports.comports():
+				if (port == None):
+					if ((f"{item.vid}" == f"{self.vendorId}") and (f"{item.pid}" == f"{self.productId}")):
+						port = item.device
+						break
+				else:
+					if (item.device == port):
+						self.vendorId = item.vid
+						self.productId = item.pid
+						break
+			else:
+				if (port == None):
+					errorMessage = f"Cannot find COM Port with a device whose vendor id is {self.vendorId} and product id is {self.productId} for open() in {self.__repr__()}"
+				else:
+					errorMessage = f"Cannot find COM Port on port {port} for open() in {self.__repr__()}"
+				raise ValueError(errorMessage)
+			self.port = port
+
+			#Configure port options
+			self.device.port         = self.port
 			self.device.baudrate     = self.baudRate
 			self.device.bytesize     = self.byteSize
 			self.device.parity       = self.parity
@@ -2243,6 +2315,38 @@ class ComPort(Utilities_Container):
 				message = message.decode("utf-8")
 
 			return message
+
+		def checkId(self, vendor = None, product = None):
+			"""Returns if the connected COM Port has the given vendor id and/or product id.
+
+			Example Input: checkId(vendor = 1529)
+			Example Input: checkId(product = 16900)
+			Example Input: checkId(vendor = 1529, product = 16900)
+			Example Input: checkId(product = [16900, 16901, 16902])
+			"""
+
+			if ((vendor == None) and (product == None)):
+				errorMessage = f"Must provide arguments 'vendor' and/or 'product' for checkId() in {self.__repr__()}"
+				raise ValueError(errorMessage)
+			if (not isinstance(vendor, (list, tuple, range, types.GeneratorType, type(None)))):
+				vendor = [vendor]
+			if (not isinstance(product, (list, tuple, range, types.GeneratorType, type(None)))):
+				product = [product]
+
+			if ((self.vendorId == None) or (self.productId == None)):
+				for item in serial.tools.list_ports.comports():
+					if (item.device == port):
+						vendorId = item.vid
+						productId = item.pid
+						break
+				else:
+					return
+			else:
+				vendorId = self.vendorId
+				productId = self.productId
+
+			return (((vendor == None) or ((vendor != None) and (vendorId in vendor))) and
+					((product == None) or ((product != None) and (productId in product))))
 
 class Barcode(Utilities_Container):
 	"""A controller for a Barcode.

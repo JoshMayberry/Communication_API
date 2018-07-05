@@ -59,8 +59,6 @@ class Iterator(object):
 			else:
 				self.order = [key if key != None else "" for key in self.data.keys()]
 
-			self.order.sort()
-
 			self.order = [key if key != "" else None for key in self.order]
 
 	def __iter__(self):

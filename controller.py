@@ -2255,7 +2255,7 @@ class ComPort(Utilities_Container):
 			#write data
 			try:
 				self.device.write(message)
-			except serial.writeTimeoutError:
+			except:
 				return False
 			return True
 

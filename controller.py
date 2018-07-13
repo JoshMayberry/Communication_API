@@ -2213,6 +2213,7 @@ class ComPort(Utilities_Container):
 
 		def send(self, message = None, autoEmpty = True):
 			"""Sends a message to the COM device.
+			Returns if the send was sucessful or not.
 
 			message (str) - The message that will be sent to the listener
 							If None: The internally stored message will be used.
@@ -2239,7 +2240,11 @@ class ComPort(Utilities_Container):
 				message = message.encode("utf-8")
 
 			#write data
-			self.device.write(message)
+			try:
+				self.device.write(message)
+			except serial.writeTimeoutError:
+				return False
+			return True
 
 		def read(self, length = None, end = None, decode = True, lines = 1, reply = None):
 			"""Listens to the comport for a message.

@@ -2101,12 +2101,14 @@ class ComPort(Utilities_Container):
 			Special thanks to Mike Molt for how tos earch by vendor id and product id on https://stackoverflow.com/questions/38661797/is-it-possible-to-refer-to-a-serial-device-by-vendor-and-device-id-in-pyserial
 
 			port (str) - If Provided, opens this port instead of the port in memory
+				- If tuple: (vendorId (int or hex), productId (int or hex))
 			autoEmpty (bool) - Determines if the comPort is automatically flushed after opening
 
 			Example Input: open()
 			Example Input: open("COM2")
 			Example Input: open(autoEmpty = False)
 			Example Input: open((1529, 16900))
+			Example Input: open((0x05F9, 0x4204))
 			"""
 
 			if (port == None):
@@ -2129,7 +2131,17 @@ class ComPort(Utilities_Container):
 
 			for item in serial.tools.list_ports.comports():
 				if (port == None):
-					if ((f"{item.vid}" == f"{self.vendorId}") and (f"{item.pid}" == f"{self.productId}")):
+					if (isinstance(self.vendorId, hex)):
+						check_vendorId = f"{item.vid}" == f"{self.vendorId}"
+					else:
+						check_vendorId = f"{item.vid:#06x}" == f"{self.vendorId}"
+
+					if (isinstance(self.productId, hex)):
+						check_productId = f"{item.pid}" == f"{self.productId}"
+					else:
+						check_productId = f"{item.pid:#06x}" == f"{self.productId}"
+
+					if (check_vendorId and check_productId):
 						port = item.device
 						break
 				else:

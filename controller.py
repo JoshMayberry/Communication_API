@@ -2128,20 +2128,21 @@ class ComPort(Utilities_Container):
 			else:
 				self.vendorId = None
 				self.productId = None
+				
+			if (isinstance(self.vendorId, str)):
+				try:
+					self.vendorId = hex(int(self.vendorId, 16))
+				except ValueError:
+					self.vendorId = int(self.vendorId)
+			if (isinstance(self.productId, str)):
+				try:
+					self.productId = hex(int(self.productId, 16))
+				except ValueError:
+					self.productId = int(self.productId)
 
 			for item in serial.tools.list_ports.comports():
 				if (port == None):
-					if (isinstance(self.vendorId, hex)):
-						check_vendorId = f"{item.vid}" == f"{self.vendorId}"
-					else:
-						check_vendorId = f"{item.vid:#06x}" == f"{self.vendorId}"
-
-					if (isinstance(self.productId, hex)):
-						check_productId = f"{item.pid}" == f"{self.productId}"
-					else:
-						check_productId = f"{item.pid:#06x}" == f"{self.productId}"
-
-					if (check_vendorId and check_productId):
+					if ((item.vid == self.vendorId) and (item.pid == self.productId)):
 						port = item.device
 						break
 				else:

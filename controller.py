@@ -2259,7 +2259,8 @@ class ComPort(Utilities_Container):
 				return False
 			return True
 
-		def read(self, length = None, end = None, decode = True, lines = 1, reply = None):
+		def read(self, length = None, end = None, decode = True, lines = 1, reply = None, 
+			reply_retryAttempts = 0, reply_retryDelay = 0, reply_retryPrintError = False):
 			"""Listens to the comport for a message.
 
 			length (int) - How long the string is expected to be
@@ -2325,7 +2326,22 @@ class ComPort(Utilities_Container):
 						break
 
 			if (reply != None):
-				self.device.write(reply)
+				try:
+					self.device.write(reply)
+				except Exception as error_1:
+					if (reply_retryPrintError):
+						traceback.print_exception(type(error_1), error_1, error_1.__traceback__)
+					attempts = 0
+					while (attempts > reply_retryAttempts):
+						try: 
+							self.device.write(reply)
+							break
+						except Exception as error_2:
+							if (reply_retryPrintError):
+								traceback.print_exception(type(error_2), error_2, error_2.__traceback__)
+							time.sleep(reply_retryDelay / 1000)
+					else:
+						return False
 
 			if (decode):
 				message = message.decode("utf-8")

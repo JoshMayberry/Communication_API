@@ -2421,6 +2421,7 @@ class Barcode(Utilities_Container):
 			self.device = None
 			self.image = None
 			self.type = "code123"
+			self.text = None
 
 			#Barcode Attributes
 			self.size = None
@@ -2429,12 +2430,23 @@ class Barcode(Utilities_Container):
 			self.correction = None
 			self.color_foreground = None
 			self.color_background = None
-			self.qrcode_correctionCatalogue = {7: qrcode.constants.ERROR_CORRECT_L, 15: qrcode.constants.ERROR_CORRECT_M, 25: qrcode.constants.ERROR_CORRECT_Q, 30: qrcode.constants.ERROR_CORRECT_H}
+			self.qrcode_correctionCatalogue = {
+			7: qrcode.constants.ERROR_CORRECT_L, 15: qrcode.constants.ERROR_CORRECT_M, 25: 
+			qrcode.constants.ERROR_CORRECT_Q, 30: qrcode.constants.ERROR_CORRECT_H, 
+			"L": qrcode.constants.ERROR_CORRECT_L, "M": qrcode.constants.ERROR_CORRECT_M, 
+			"Q": qrcode.constants.ERROR_CORRECT_Q, "H": qrcode.constants.ERROR_CORRECT_H, 
+			"l": qrcode.constants.ERROR_CORRECT_L, "m": qrcode.constants.ERROR_CORRECT_M, 
+			"q": qrcode.constants.ERROR_CORRECT_Q, "h": qrcode.constants.ERROR_CORRECT_H}
 
 		def getType(self, formatted = False):
 			"""Returns the barcode type."""
 
 			return self.type
+
+		def getText(self):
+			"""Returns what the barcode should say when decoded."""
+
+			return self.text
 
 		def setType(self, newType):
 			"""Sets the default barcode type."""
@@ -2454,9 +2466,11 @@ class Barcode(Utilities_Container):
 			Example Input: setCorrection(30)
 			"""
 
-			if (percent not in [7, 15, 25, 30]):
-				percent = self.getClosest([7, 15, 25, 30], percent)
-
+			if (percent not in self.qrcode_correctionCatalogue):
+				if (isinstance(percent, (int, float))):
+					percent = self.getClosest([7, 15, 25, 30], percent)
+				else:
+					percent = 15
 			self.correction = self.qrcode_correctionCatalogue[percent]
 
 		def setSize(self, number = None):
@@ -2466,7 +2480,7 @@ class Barcode(Utilities_Container):
 			Example Input: setSize(5)
 			"""
 
-			if (number not in [None, range(1, 40)]):
+			if ((number != None) and (number not in range(1, 40))):
 				number = self.getClosest(range(1, 40), number)
 
 			self.size = number
@@ -2525,6 +2539,7 @@ class Barcode(Utilities_Container):
 			Example Input: create(1234567890, "code128")
 			"""
 
+			self.text = text
 			if (codeType not in [None, self.type]):
 				self.setType(codeType)
 
@@ -2570,6 +2585,20 @@ class Barcode(Utilities_Container):
 			"""Returns the barcode."""
 
 			return self.image
+
+		def getBestSize(self, text):
+			"""Returns what qr code version would be applied to keep the barcode small.
+
+			text (str) - What the barcode would say
+
+			Example Input: getBestSize(1234567890)
+			"""
+			if (self.correction == None):
+				self.correction = qrcode.constants.ERROR_CORRECT_M
+
+			device = qrcode.QRCode(error_correction = self.correction)
+			device.add_data(f"{text}")
+			return device.best_fit()
 
 class Communication():
 	"""Helps the user to communicate with other devices.

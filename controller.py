@@ -1,6 +1,7 @@
-__version__ = "1.0.0"
+__version__ = "1.1.1"
 
 #Import standard elements
+import os
 import warnings
 import traceback
 import threading
@@ -16,9 +17,17 @@ import serial
 import netaddr
 import serial.tools.list_ports
 
-#Import barcode software for drawing and decoding barcodes
+#Import barcode modules for drawing and decoding barcodes
 import qrcode
 import barcode
+
+#Import email modules for sending and viewing emails
+import smtplib
+import xml.etree.cElementTree as xml
+from email import encoders as email_encoders
+from email.mime.base import MIMEBase as email_MIMEBase
+from email.mime.text import MIMEText as email_MIMEText
+from email.mime.multipart import MIMEMultipart as email_MIMEMultipart
 
 #Required Modules
 ##py -m pip install
@@ -55,9 +64,9 @@ class Iterator(object):
 			self.order = list(self.data.keys())
 
 			if (filterNone):
-				self.order = [key for key in self.data.keys() if key != None]
+				self.order = [key for key in self.data.keys() if key is not None]
 			else:
-				self.order = [key if key != None else "" for key in self.data.keys()]
+				self.order = [key if key is not None else "" for key in self.data.keys()]
 
 			self.order = [key if key != "" else None for key in self.order]
 
@@ -102,14 +111,14 @@ class ThreadQueue():
 			nonlocal self
 
 			#Skip empty functions
-			if (myFunctionList != None):
+			if (myFunctionList is not None):
 				myFunctionList, myFunctionArgsList, myFunctionKwargsList = Utilities_Base.formatFunctionInputList(self, myFunctionList, myFunctionArgsList, myFunctionKwargsList)
 				
 				#Run each function
 				answerList = []
 				for i, myFunction in enumerate(myFunctionList):
 					#Skip empty functions
-					if (myFunction != None):
+					if (myFunction is not None):
 						myFunctionEvaluated, myFunctionArgs, myFunctionKwargs = Utilities_Base.formatFunctionInput(self, i, myFunctionList, myFunctionArgsList, myFunctionKwargsList)
 						answer = runFunction(myFunctionEvaluated, myFunctionArgs, myFunctionKwargs)
 						answerList.append(answer)
@@ -124,15 +133,15 @@ class ThreadQueue():
 			nonlocal self
 
 			#Has both args and kwargs
-			if ((myFunctionKwargs != None) and (myFunctionArgs != None)):
+			if ((myFunctionKwargs is not None) and (myFunctionArgs is not None)):
 				answer = myFunction(*myFunctionArgs, **myFunctionKwargs)
 
 			#Has args, but not kwargs
-			elif (myFunctionArgs != None):
+			elif (myFunctionArgs is not None):
 				answer = myFunction(*myFunctionArgs)
 
 			#Has kwargs, but not args
-			elif (myFunctionKwargs != None):
+			elif (myFunctionKwargs is not None):
 				answer = myFunction(**myFunctionKwargs)
 
 			#Has neither args nor kwargs
@@ -215,7 +224,7 @@ class MyThread(threading.Thread):
 		# self.setDaemon(daemon)
 
 		#Setup thread properties
-		if (threadID != None):
+		if (threadID is not None):
 			self.threadID = threadID
 
 		self.stopEvent = threading.Event() #Used to stop the thread
@@ -267,15 +276,15 @@ class MyThread(threading.Thread):
 				time.sleep(0.01)
 
 		#Has both args and kwargs
-		if ((self.myFunctionKwargs != None) and (self.myFunctionArgs != None)):
+		if ((self.myFunctionKwargs is not None) and (self.myFunctionArgs is not None)):
 			self.myFunction(*self.myFunctionArgs, **self.myFunctionKwargs)
 
 		#Has args, but not kwargs
-		elif (self.myFunctionArgs != None):
+		elif (self.myFunctionArgs is not None):
 			self.myFunction(*self.myFunctionArgs)
 
 		#Has kwargs, but not args
-		elif (self.myFunctionKwargs != None):
+		elif (self.myFunctionKwargs is not None):
 			self.myFunction(**self.myFunctionKwargs)
 
 		#Has neither args nor kwargs
@@ -300,9 +309,9 @@ class Utilities_Base():
 
 	def __str__(self):
 		output = f"{type(self).__name__}()\n-- id: {id(self)}\n"
-		if (hasattr(self, "parent") and (self.parent != None)):
+		if (hasattr(self, "parent") and (self.parent is not None)):
 			output += f"-- Parent: {self.parent.__repr__()}\n"
-		if (hasattr(self, "root") and (self.root != None)):
+		if (hasattr(self, "root") and (self.root is not None)):
 			output += f"-- Root: {self.root.__repr__()}\n"
 		return output
 
@@ -328,7 +337,7 @@ class Utilities_Base():
 		return self
 
 	def __exit__(self, exc_type, exc_value, traceback):
-		if (traceback != None):
+		if (traceback is not None):
 			print(exc_type, exc_value)
 			return False
 
@@ -349,19 +358,19 @@ class Utilities_Base():
 		"""
 
 		#Account for retrieving all nested
-		if (itemLabel == None):
+		if (itemLabel is None):
 			itemLabel = slice(None, None, None)
 
 		#Account for indexing
 		if (isinstance(itemLabel, slice)):
-			if (itemLabel.step != None):
+			if (itemLabel.step is not None):
 				raise FutureWarning(f"Add slice steps to _get() for indexing {self.__repr__()}")
 			
-			elif ((itemLabel.start != None) and (itemLabel.start not in self.childCatalogue)):
+			elif ((itemLabel.start is not None) and (itemLabel.start not in self.childCatalogue)):
 				errorMessage = f"There is no item labled {itemLabel.start} in the row catalogue for {self.__repr__()}"
 				raise KeyError(errorMessage)
 			
-			elif ((itemLabel.stop != None) and (itemLabel.stop not in self.childCatalogue)):
+			elif ((itemLabel.stop is not None) and (itemLabel.stop not in self.childCatalogue)):
 				errorMessage = f"There is no item labled {itemLabel.stop} in the row catalogue for {self.__repr__()}"
 				raise KeyError(errorMessage)
 
@@ -369,9 +378,9 @@ class Utilities_Base():
 			begin = False
 			for item in sorted(self.childCatalogue.keys()):
 				#Allow for slicing with non-integers
-				if ((not begin) and ((itemLabel.start == None) or (self.childCatalogue[item].label == itemLabel.start))):
+				if ((not begin) and ((itemLabel.start is None) or (self.childCatalogue[item].label == itemLabel.start))):
 					begin = True
-				elif ((itemLabel.stop != None) and (self.childCatalogue[item].label == itemLabel.stop)):
+				elif ((itemLabel.stop is not None) and (self.childCatalogue[item].label == itemLabel.stop)):
 					break
 
 				#Slice catalogue via creation date
@@ -385,9 +394,9 @@ class Utilities_Base():
 			answer = self.childCatalogue[itemLabel]
 
 		if (returnExists):
-			return answer != None
+			return answer is not None
 
-		if (answer != None):
+		if (answer is not None):
 			if (isinstance(answer, (list, tuple, range))):
 				if (len(answer) == 1):
 					answer = answer[0]
@@ -410,7 +419,7 @@ class Utilities_Base():
 		mainThread = threading.main_thread()
 
 		#How this function will be passed
-		if (thread != None):
+		if (thread is not None):
 			pass
 
 		else:
@@ -447,14 +456,14 @@ class Utilities_Base():
 		"""
 
 		#Skip empty functions
-		if (myFunction != None):
+		if (myFunction is not None):
 			myFunctionList, myFunctionArgsList, myFunctionKwargsList = self.formatFunctionInputList(myFunction, myFunctionArgs, myFunctionKwargs)
 
 			#Run each function
 			for i, myFunction in enumerate(myFunctionList):
 
 				#Skip empty functions
-				if (myFunction != None):
+				if (myFunction is not None):
 					myFunctionEvaluated, myFunctionArgs, myFunctionKwargs = self.formatFunctionInput(i, myFunctionList, myFunctionArgsList, myFunctionKwargsList)
 
 					#Determine how to run the function
@@ -465,14 +474,14 @@ class Utilities_Base():
 						return thread
 					else:
 						#Add to the idling queue
-						if (self.idleQueue != None):
+						if (self.idleQueue is not None):
 							self.idleQueue.append([myFunctionEvaluated, myFunctionArgs, myFunctionKwargs, shown])
 						else:
 							warnings.warn(f"The window {self} was given it's own idle function by the user for {self.__repr__()}", Warning, stacklevel = 2)
 				else:
-					warnings.warn(f"function {i} in myFunctionList == None for backgroundRun() for {self.__repr__()}", Warning, stacklevel = 2)
+					warnings.warn(f"function {i} in myFunctionList is None for backgroundRun() for {self.__repr__()}", Warning, stacklevel = 2)
 		else:
-			warnings.warn(f"myFunction == None for backgroundRun() for {self.__repr__()}", Warning, stacklevel = 2)
+			warnings.warn(f"myFunction is None for backgroundRun() for {self.__repr__()}", Warning, stacklevel = 2)
 
 		return None
 
@@ -481,7 +490,7 @@ class Utilities_Base():
 
 		#Ensure that multiple function capability is given
 		##Functions
-		if (myFunctionList != None):
+		if (myFunctionList is not None):
 			#Compensate for the user not making it a list
 			if (type(myFunctionList) != list):
 				if (type(myFunctionList) == tuple):
@@ -494,7 +503,7 @@ class Utilities_Base():
 				myFunctionList.reverse()
 
 		##args
-		if (myFunctionArgsList != None):
+		if (myFunctionArgsList is not None):
 			#Compensate for the user not making it a list
 			if (type(myFunctionArgsList) != list):
 				if (type(myFunctionArgsList) == tuple):
@@ -510,7 +519,7 @@ class Utilities_Base():
 				myFunctionArgsList = [myFunctionArgsList]
 
 		##kwargs
-		if (myFunctionKwargsList != None):
+		if (myFunctionKwargsList is not None):
 			#Compensate for the user not making it a list
 			if (type(myFunctionKwargsList) != list):
 				if (type(myFunctionKwargsList) == tuple):
@@ -530,14 +539,14 @@ class Utilities_Base():
 		myFunction = myFunctionList[i]
 
 		#Skip empty functions
-		if (myFunction != None):
+		if (myFunction is not None):
 			#Use the correct args and kwargs
-			if (myFunctionArgsList != None):
+			if (myFunctionArgsList is not None):
 				myFunctionArgs = myFunctionArgsList[i]
 			else:
 				myFunctionArgs = myFunctionArgsList
 
-			if (myFunctionKwargsList != None):
+			if (myFunctionKwargsList is not None):
 				myFunctionKwargs = myFunctionKwargsList[i]
 				
 			else:
@@ -552,7 +561,7 @@ class Utilities_Base():
 				myFunctionEvaluated = eval(myFunction, {'__builtins__': None}, {})
 
 			#Ensure the *args and **kwargs are formatted correctly 
-			if (myFunctionArgs != None):
+			if (myFunctionArgs is not None):
 				#Check for single argument cases
 				if ((type(myFunctionArgs) != list)):
 					#The user passed one argument that was not a list
@@ -563,7 +572,7 @@ class Utilities_Base():
 				#       myFunctionArgs = [myFunctionArgs]
 
 			#Check for user error
-			if ((type(myFunctionKwargs) != dict) and (myFunctionKwargs != None)):
+			if ((type(myFunctionKwargs) != dict) and (myFunctionKwargs is not None)):
 				errorMessage = f"myFunctionKwargs must be a dictionary for function {myFunctionEvaluated.__repr__()}"
 				raise ValueError(errorMessage)
 
@@ -649,7 +658,7 @@ class Utilities_Container(Utilities_Base):
 		Example Input: remove(0)
 		"""
 
-		if (child == None):
+		if (child is None):
 			child = self.current
 		elif (not isinstance(child, self.Child)):
 			child = self[child]
@@ -666,7 +675,7 @@ class Utilities_Container(Utilities_Base):
 		Example Input: select(0)
 		"""
 
-		if (child == None):
+		if (child is None):
 			child = list(self)[0]
 		elif (not isinstance(child, self.Child)):
 			child = self[child]
@@ -683,7 +692,7 @@ class Utilities_Child(Utilities_Base):
 		if (not hasattr(self, "root")): self.root = self.parent.root
 
 		#Nest in parent
-		if (self.label == None):
+		if (self.label is None):
 			self.label = 0
 			while True:
 				if (self.label not in self.parent):
@@ -1022,7 +1031,7 @@ class Ethernet(Utilities_Container):
 			#Mark end of message
 			self.ipScanBlock.append(None)
 
-		if ((start == None) or (end == None)):
+		if ((start is None) or (end is None)):
 			raise FutureWarning("Add code here for getting the current ip Address")
 			currentIp = "169.254.231.24"
 			start = currentIp[:-2] + "0"
@@ -1043,7 +1052,7 @@ class Ethernet(Utilities_Container):
 		#The entire message has been read once the last element is None.
 		finished = False
 		if (len(self.ipScanBlock) != 0):
-			if (self.ipScanBlock[-1] == None):
+			if (self.ipScanBlock[-1] is None):
 				finished = True
 				self.ipScanBlock.pop(-1) #Remove the None from the end so the user does not get confused
 
@@ -1102,11 +1111,11 @@ class Ethernet(Utilities_Container):
 			Example Input: open("www.example.com")
 			"""
 
-			if (self.device != None):
+			if (self.device is not None):
 				warnings.warn(f"Socket already opened", Warning, stacklevel = 2)
 
 			#Account for the socket having been closed
-			# if (self.device == None):
+			# if (self.device is None):
 			if (stream):
 				self.device = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 				self.stream = "SOCK_STREAM"
@@ -1160,11 +1169,11 @@ class Ethernet(Utilities_Container):
 			Example Input: close(None)
 			"""
 
-			if (self.device == None):
+			if (self.device is None):
 				warnings.warn(f"Socket already closed", Warning, stacklevel = 2)
 				return
 
-			if (now != None):
+			if (now is not None):
 				if (now):
 					self.restrict()
 
@@ -1218,7 +1227,7 @@ class Ethernet(Utilities_Container):
 				#Listen
 				while True:
 					#Check for stop command
-					if (self.recieveStop or (self.device == None)):# or ((len(self.dataBlock) > 0) and (self.dataBlock[-1] == None))):
+					if (self.recieveStop or (self.device is None)):# or ((len(self.dataBlock) > 0) and (self.dataBlock[-1] is None))):
 						self.recieveStop = False
 						break
 
@@ -1256,7 +1265,7 @@ class Ethernet(Utilities_Container):
 				warnings.warn(f"Already listening to socket", Warning, stacklevel = 2)
 				return None
 
-			if ((len(self.dataBlock) > 0) and (self.dataBlock[-1] == None)):
+			if ((len(self.dataBlock) > 0) and (self.dataBlock[-1] is None)):
 				warnings.warn(f"Use checkRecieve() to take out data", Warning, stacklevel = 2)
 				return None
 
@@ -1278,7 +1287,7 @@ class Ethernet(Utilities_Container):
 
 			if (not self.recieveListening):
 				if (len(self.dataBlock) > 0):
-					if (self.dataBlock[-1] != None):
+					if (self.dataBlock[-1] is not None):
 						self.startRecieve()
 				else:
 					self.startRecieve()
@@ -1288,7 +1297,7 @@ class Ethernet(Utilities_Container):
 			compareBlock = self.dataBlock[:] #Account for changing mid-analysis
 			self.dataBlock = []
 			if (len(compareBlock) != 0):
-				if (compareBlock[-1] == None):
+				if (compareBlock[-1] is None):
 					finished = True
 
 					if (removeNone):
@@ -1327,7 +1336,7 @@ class Ethernet(Utilities_Container):
 				nonlocal self, address, port, clients, scanDelay
 
 				#Bind the socket to the port
-				if (address == None):
+				if (address is None):
 					address = '0.0.0.0'
 
 				#Remove any white space
@@ -1349,7 +1358,7 @@ class Ethernet(Utilities_Container):
 						connection, clientIp = self.device.accept()
 					except:
 						traceback.print_exc()
-						if (clientIp != None):
+						if (clientIp is not None):
 							count = self.closeClient(clientIp[0], count)
 						else:
 							break
@@ -1358,7 +1367,7 @@ class Ethernet(Utilities_Container):
 						if (count <= 0):
 							break
 
-					if (clientIp != None):
+					if (clientIp is not None):
 						#Catalogue client
 						if (clientIp not in self.clientDict):
 							self.clientDict[clientIp] = {"device": connection, "data": "", "stop": False, "listening": False, "finished": False}
@@ -1518,7 +1527,7 @@ class Ethernet(Utilities_Container):
 				client.close()
 				del(self.clientDict[clientIp])
 
-			if (clientsLeft != None):
+			if (clientsLeft is not None):
 				return clientsLeft - 1
 
 		def restrict(self, how = "rw"):
@@ -1601,7 +1610,7 @@ class Ethernet(Utilities_Container):
 			"""
 
 			#Ensure that there is no negative value
-			if (timeout != None):
+			if (timeout is not None):
 				if (timeout < 0):
 					warnings.warn(f"Timeout cannot be negative for setTimeout() in {self.__repr__()}", Warning, stacklevel = 2)
 					return
@@ -1634,7 +1643,7 @@ class Ethernet(Utilities_Container):
 			#   return True
 			# return False
 
-			if (self.device == None):
+			if (self.device is None):
 				return True
 			return False
 
@@ -1688,12 +1697,12 @@ class ComPort(Utilities_Container):
 		Example Input: getAll(exclude = ["serial", "description"])
 		"""
 
-		if (include == None):
+		if (include is None):
 			include = []
 		elif (not isinstance(include, (list, tuple, types.GeneratorType))):
 			include = [include]
 
-		if (exclude == None):
+		if (exclude is None):
 			exclude = []
 		elif (not isinstance(exclude, (list, tuple, types.GeneratorType))):
 			exclude = [exclude]
@@ -1958,7 +1967,7 @@ class ComPort(Utilities_Container):
 			Example Input: setParity("odd")
 			"""
 
-			if (value != None):
+			if (value is not None):
 				#Ensure correct format
 				if (type(value) == str):
 					value = value.lower()
@@ -2111,9 +2120,9 @@ class ComPort(Utilities_Container):
 			Example Input: open((0x05F9, 0x4204))
 			"""
 
-			if (port == None):
+			if (port is None):
 				port = self.port
-				if (port == None):
+				if (port is None):
 					errorMessage = f"'port' cannot be None for open() in {self.__repr__()}"
 					raise ValueError(errorMessage)
 
@@ -2141,7 +2150,7 @@ class ComPort(Utilities_Container):
 					self.productId = int(self.productId)
 
 			for item in serial.tools.list_ports.comports():
-				if (port == None):
+				if (port is None):
 					if ((item.vid == self.vendorId) and (item.pid == self.productId)):
 						port = item.device
 						break
@@ -2151,7 +2160,7 @@ class ComPort(Utilities_Container):
 						self.productId = item.pid
 						break
 			else:
-				if (port == None):
+				if (port is None):
 					errorMessage = f"Cannot find COM Port with a device whose vendor id is {self.vendorId} and product id is {self.productId} for open() in {self.__repr__()}"
 				else:
 					errorMessage = f"Cannot find COM Port on port {port} for open() in {self.__repr__()}"
@@ -2168,12 +2177,12 @@ class ComPort(Utilities_Container):
 			self.device.rtscts       = self.rtsCts
 			self.device.dsrdtr       = self.dsrDtr
 
-			if (self.timeoutRead == None):
+			if (self.timeoutRead is None):
 				self.device.timeout = None
 			else:
 				self.device.timeout = self.timeoutRead / 1000
 
-			if (self.timeoutWrite == None):
+			if (self.timeoutWrite is None):
 				self.device.writeTimeout = None
 			else:
 				self.device.writeTimeout = self.timeoutWrite / 1000
@@ -2235,10 +2244,10 @@ class ComPort(Utilities_Container):
 			Example Input: send("Lorem ipsum")
 			"""
 
-			if (message == None):
+			if (message is None):
 				message = self.message
 
-			if (message == None):
+			if (message is None):
 				warnings.warn(f"No message to send for send() in {self.__repr__()}", Warning, stacklevel = 2)
 				return
 			
@@ -2286,17 +2295,17 @@ class ComPort(Utilities_Container):
 				warnings.warn(f"Serial port has not been opened yet for {self.__repr__()}\n Make sure that ports are available and then launch this application again", Warning, stacklevel = 2)
 				return
 
-			if (reply != None):
+			if (reply is not None):
 				if (not isinstance(reply, bytes)):
 					reply = reply.encode("utf-8")
 
-			if (end == None):
-				if (length == None):
+			if (end is None):
+				if (length is None):
 					length = 1
 				message = self.device.read(length)
 			elif (end == "\n"):
 				if (lines <= 1):
-					if (length == None):
+					if (length is None):
 						length = -1
 					message = self.device.readline(length)
 				else:
@@ -2306,7 +2315,7 @@ class ComPort(Utilities_Container):
 
 				if (not isinstance(end, bytes)):
 					end = end.encode("utf-8")
-				if (length == None):
+				if (length is None):
 					length = 1
 
 				linesRead = 0
@@ -2325,7 +2334,7 @@ class ComPort(Utilities_Container):
 					if (linesRead >= lines):
 						break
 
-			if (reply != None):
+			if (reply is not None):
 				try:
 					self.device.write(reply)
 				except Exception as error_1:
@@ -2357,7 +2366,7 @@ class ComPort(Utilities_Container):
 			Example Input: checkId(product = [16900, 16901, 16902])
 			"""
 
-			if ((vendor == None) and (product == None)):
+			if ((vendor is None) and (product is None)):
 				errorMessage = f"Must provide arguments 'vendor' and/or 'product' for checkId() in {self.__repr__()}"
 				raise ValueError(errorMessage)
 			if (not isinstance(vendor, (list, tuple, range, types.GeneratorType, type(None)))):
@@ -2365,7 +2374,7 @@ class ComPort(Utilities_Container):
 			if (not isinstance(product, (list, tuple, range, types.GeneratorType, type(None)))):
 				product = [product]
 
-			if ((self.vendorId == None) or (self.productId == None)):
+			if ((self.vendorId is None) or (self.productId is None)):
 				for item in serial.tools.list_ports.comports():
 					if (item.device == port):
 						vendorId = item.vid
@@ -2377,8 +2386,8 @@ class ComPort(Utilities_Container):
 				vendorId = self.vendorId
 				productId = self.productId
 
-			return (((vendor == None) or ((vendor != None) and (vendorId in vendor))) and
-					((product == None) or ((product != None) and (productId in product))))
+			return (((vendor is None) or ((vendor is not None) and (vendorId in vendor))) and
+					((product is None) or ((product is not None) and (productId in product))))
 
 class Barcode(Utilities_Container):
 	"""A controller for a Barcode.
@@ -2411,7 +2420,8 @@ class Barcode(Utilities_Container):
 	class Child(Utilities_Child):
 		"""A COM Port connection."""
 
-		def __init__(self, parent, label):
+		def __init__(self, parent, label, size = None, pixelSize = None, borderSize = None, 
+			correction = None, color_foreground = None, color_background = None):
 			"""Defines the internal variables needed to run."""
 
 			#Initialize Inherited Modules
@@ -2424,12 +2434,12 @@ class Barcode(Utilities_Container):
 			self.text = None
 
 			#Barcode Attributes
-			self.size = None
-			self.pixelSize = None
-			self.borderSize = None
-			self.correction = None
-			self.color_foreground = None
-			self.color_background = None
+			self.size = size
+			self.pixelSize = pixelSize
+			self.borderSize = borderSize
+			self.correction = correction
+			self.color_foreground = color_foreground
+			self.color_background = color_background
 			self.qrcode_correctionCatalogue = {
 			7: qrcode.constants.ERROR_CORRECT_L, 15: qrcode.constants.ERROR_CORRECT_M, 25: 
 			qrcode.constants.ERROR_CORRECT_Q, 30: qrcode.constants.ERROR_CORRECT_H, 
@@ -2480,7 +2490,7 @@ class Barcode(Utilities_Container):
 			Example Input: setSize(5)
 			"""
 
-			if ((number != None) and (number not in range(1, 40))):
+			if ((number is not None) and (number not in range(1, 40))):
 				number = self.getClosest(range(1, 40), number)
 
 			self.size = number
@@ -2492,7 +2502,7 @@ class Barcode(Utilities_Container):
 			Example Input: setPixelSize(5)
 			"""
 
-			if (number == None):
+			if (number is None):
 				number = 10
 
 			self.pixelSize = number
@@ -2504,7 +2514,7 @@ class Barcode(Utilities_Container):
 			Example Input: setBorderSize(5)
 			"""
 
-			if (number == None):
+			if (number is None):
 				number = 4
 
 			self.borderSize = number
@@ -2519,15 +2529,16 @@ class Barcode(Utilities_Container):
 			Example Input: setColor("red", "blue")
 			"""
 
-			if (foreground == None):
+			if (foreground is None):
 				foreground = "black"
-			if (background == None):
+			if (background is None):
 				background = "white"
 
 			self.color_foreground = foreground
 			self.color_background = background
 
-		def create(self, text, codeType = None, filePath = None):
+		def create(self, text, codeType = None, filePath = None, size = None, pixelSize = None, borderSize = None, 
+			correction = None, color_foreground = None, color_background = None):
 			"""Returns a PIL image of the barcode for the user or saves it somewhere as an image.
 			Use: https://ourcodeworld.com/articles/read/554/how-to-create-a-qr-code-image-or-svg-in-python
 
@@ -2545,16 +2556,33 @@ class Barcode(Utilities_Container):
 
 			#Create barcode
 			if (self.type == "qr"):
-				if (self.correction == None):
+				if (correction is not None):
+					self.correction = correction
+				elif (self.correction is None):
 					self.correction = qrcode.constants.ERROR_CORRECT_M
-				if (self.pixelSize == None):
+
+				if (pixelSize is not None):
+					self.pixelSize = pixelSize
+				elif (self.pixelSize is None):
 					self.pixelSize = 10
-				if (self.borderSize == None):
+
+				if (borderSize is not None):
+					self.borderSize = borderSize
+				elif (self.borderSize is None):
 					self.borderSize = 4
-				if (self.color_foreground == None):
+
+				if (color_foreground is not None):
+					self.color_foreground = color_foreground
+				elif (self.color_foreground is None):
 					self.color_foreground = "black"
-				if (self.color_background == None):
+
+				if (color_background is not None):
+					self.color_background = color_background
+				elif (self.color_background is None):
 					self.color_background = "white"
+
+				if (size is not None):
+					self.size = size
 
 				self.device = qrcode.QRCode(version = self.size,
 					error_correction = self.correction,
@@ -2571,7 +2599,7 @@ class Barcode(Utilities_Container):
 				self.device = barcode.get(self.type, f"{text}", writer = barcode.writer.ImageWriter())
 				self.image = self.device.render(writer_options = None)
 
-				if (filePath != None):
+				if (filePath is not None):
 					self.device.save(filePath)
 
 			return self.image
@@ -2593,12 +2621,145 @@ class Barcode(Utilities_Container):
 
 			Example Input: getBestSize(1234567890)
 			"""
-			if (self.correction == None):
+			if (self.correction is None):
 				self.correction = qrcode.constants.ERROR_CORRECT_M
 
 			device = qrcode.QRCode(error_correction = self.correction)
 			device.add_data(f"{text}")
 			return device.best_fit()
+
+class Email(Utilities_Container):
+	"""A controller for a Email connection.
+	Note: If you use gmail, make sure you allow less secure apps: https://myaccount.google.com/lesssecureapps?pli=1
+
+	Special thanks to Nael Shiab for how to send emails with attachments on http://naelshiab.com/tutorial-send-email-python/
+	
+	______________________ EXAMPLE USE ______________________
+	
+	com = API_Com.build()
+	email = com.email[0]
+	email.open("lorem.ipsum@example.com", "LoremIpsum")
+	email.append("Lorem ipsum dolor sit amet")
+	email.attach("example.txt")
+	email.send("dolor.sit@example.com")
+	_________________________________________________________
+	"""
+
+	def __init__(self, parent):
+		"""Defines the internal variables needed to run."""
+
+		#Initialize Inherited Modules
+		Utilities_Container.__init__(self, parent)
+
+	class Child(Utilities_Child):
+		"""A USB conection."""
+
+		def __init__(self, parent, label):
+			"""Defines the internal variables needed to run."""
+
+			#Initialize Inherited Modules
+			Utilities_Child.__init__(self, parent, label)
+		
+			#Internal Variables
+			self.device = None
+			self._password = None
+
+			self.current_config = None
+
+		def open(self, address, password, server = None, port = None):
+			"""Opens a connection to an email to send from.
+
+			address (str) - A valid email address to send from
+			password (str) - The password for 'address'
+
+			server (str) - What email server is being used
+				- If None: Will use gmail
+			port (int) - What port to use
+				- If None: 587
+
+			Example Input: open("lorem.ipsum@example.com", "LoremIpsum")
+			Example Input: open("lorem.ipsum@example.com", "LoremIpsum", server = "194.2.1.1", port = 587)
+			"""
+
+			self.device = email_MIMEMultipart()
+			self.device["From"] = address
+			self._password = password
+
+			self.attachBody = True
+			self.message_root = xml.Element('html')
+			self.message_body = xml.SubElement(self.message_root, 'body')
+
+			self.server = server or "smtp.gmail.com"
+			self.port = port or 587
+
+		def append(self, text, header = None, link = None):
+			"""Appends the given text to the email.
+			Use: https://stackoverflow.com/questions/882712/sending-html-email-using-python
+			Use: https://www.blog.pythonlibrary.org/2013/04/30/python-101-intro-to-xml-parsing-with-elementtree/
+
+			text (str) - What to append to the end of the email
+
+			Example Input: append("Lorem ipsum dolor sit amet")
+			Example Input: append("Lorem ipsum dolor sit amet", header = "Lorem Ipsum")
+			Example Input: append("Lorem ipsum dolor sit amet", link = "https://www.lipsum.com/")
+			"""
+
+			if (header):
+				paragraph = xml.SubElement(self.message_body, 'h2')
+				paragraph.text = header
+
+			paragraph = xml.SubElement(self.message_body, 'p')
+			paragraph.text = text
+
+			if (link):
+				paragraph = xml.SubElement(self.message_body, 'a', attrib = {"href": link[0]})
+				paragraph.text = link[1]
+
+		def attach(self, filePath):
+			"""Attaches the file at the given path to the email.
+
+			filePath (str) - Where the file is located
+
+			Example Input: attach("example.txt")
+			"""
+
+			if (not os.path.exists(filePath)):
+				warnings.warn(f"There is no file {filePath}", Warning, stacklevel = 2)
+				return
+
+			attachment = email_MIMEBase('application', 'octet-stream')
+			attachment.set_payload(open(filePath, "rb").read())
+			
+			email_encoders.encode_base64(attachment)
+			attachment.add_header('Content-Disposition', f"attachment; filename = {os.path.basename(filePath)}")
+			 
+			self.device.attach(attachment)
+
+		def send(self, address, subject = None, server = None, port = None):
+			"""Sends an email to the provided address.
+
+			address (str) - A valid email address to send to
+			subject (str) - The subject of the email
+
+			Example Input: send("dolor.sit@example.com")
+			Example Input: send("dolor.sit@example.com", subject = "Example")
+			"""
+			assert self.device is not None
+
+			if (subject):
+				self.device["Subject"] = subject
+			if (self.attachBody):
+				self.device.attach(email_MIMEText(xml.tostring(self.message_root, method = "html").decode(), "html"))
+				self.attachBody = False
+
+			port = int(port or self.port)
+			server = server or self.server
+
+			server = smtplib.SMTP(server, port)
+			server.starttls()
+			server.login(self.device["From"], self._password)
+			server.sendmail(self.device["From"], address, self.device.as_string())
+			server.quit()
 
 class Communication():
 	"""Helps the user to communicate with other devices.
@@ -2607,11 +2768,12 @@ class Communication():
 		- COM Port
 		- Ethernet & Wi-fi
 		- Barcode
+		- QR Code
 		- USB
+		- Email
 
 	UPCOMING SUPPORTED METHODS
 		- Raspberry Pi GPIO
-		- QR Code
 
 	Example Input: Communication()
 	"""
@@ -2622,6 +2784,7 @@ class Communication():
 		self.ethernet = Ethernet(self)
 		self.barcode = Barcode(self)
 		self.comPort = ComPort(self)
+		self.email = Email(self)
 		self.usb = USB(self)
 
 	def __str__(self):
@@ -2633,6 +2796,7 @@ class Communication():
 		output += f"-- COM Ports: {len(self.comPort)}\n"
 		output += f"-- USB Ports: {len(self.usb)}\n"
 		output += f"-- Barcodes: {len(self.barcode)}\n"
+		output += f"-- Email Accounts: {len(self.email)}\n"
 
 		return output
 
@@ -2646,7 +2810,7 @@ class Communication():
 		Example Input: getAll()
 		"""
 
-		return [self.ethernet, self.comPort, self.usb, self.barcode]
+		return [self.ethernet, self.comPort, self.usb, self.barcode, self.email]
 
 if __name__ == '__main__':
 	com = build()

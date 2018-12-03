@@ -31,11 +31,11 @@ from email.mime.multipart import MIMEMultipart as email_MIMEMultipart
 
 #Required Modules
 ##py -m pip install
-	# pyserial
-	# netaddr
 	# pyusb
-	# pyBarcode
 	# qrcode
+	# netaddr
+	# pyserial
+	# pyBarcode
 
 ##Module dependancies (Install the following .exe and/or .dll files)
 	#The latest Windows binary on "https://sourceforge.net/projects/libusb/files/libusb-1.0/libusb-1.0.21/libusb-1.0.21.7z/download"
@@ -2326,7 +2326,6 @@ class ComPort(Utilities_Container):
 
 						value = self.device.read(length)
 						message += value
-						print("@1", message)
 						if (end in value):
 							linesRead += 1
 							break

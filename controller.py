@@ -1,4 +1,17 @@
 __version__ = "1.1.1"
+__about__ = """Helps the user to communicate with other devices.
+
+	CURRENTLY SUPPORTED METHODS
+		- COM Port
+		- Ethernet & Wi-fi
+		- Barcode
+		- QR Code
+		- USB
+		- Email
+
+	UPCOMING SUPPORTED METHODS
+		- Raspberry Pi GPIO
+	"""
 
 #Import standard elements
 import os
@@ -29,6 +42,8 @@ from email.mime.base import MIMEBase as email_MIMEBase
 from email.mime.text import MIMEText as email_MIMEText
 from email.mime.multipart import MIMEMultipart as email_MIMEMultipart
 
+import Utilities as MyUtilities
+
 #Required Modules
 ##py -m pip install
 	# pyusb
@@ -45,578 +60,12 @@ from email.mime.multipart import MIMEMultipart as email_MIMEMultipart
 #User Access Variables
 ethernetError = socket.error
 
-#Controllers
-def build(*args, **kwargs):
-	"""Starts the GUI making process."""
-
-	return Communication(*args, **kwargs)
-
-#Iterators
-class Iterator(object):
-	"""Used by handle objects to iterate over their nested objects."""
-
-	def __init__(self, data, filterNone = False):
-		if (not isinstance(data, (list, dict))):
-			data = data[:]
-
-		self.data = data
-		if (isinstance(self.data, dict)):
-			self.order = list(self.data.keys())
-
-			if (filterNone):
-				self.order = [key for key in self.data.keys() if key is not None]
-			else:
-				self.order = [key if key is not None else "" for key in self.data.keys()]
-
-			self.order = [key if key != "" else None for key in self.order]
-
-	def __iter__(self):
-		return self
-
-	def __next__(self):
-		if (not isinstance(self.data, dict)):
-			if not self.data:
-				raise StopIteration
-
-			return self.data.pop()
-		else:
-			if not self.order:
-				raise StopIteration
-
-			key = self.order.pop()
-			return self.data[key]
-
-#Background Processes
-class ThreadQueue():
-	"""Used by passFunction() to move functions from one thread to another.
-	Special thanks to Claudiu for the base code on https://stackoverflow.com/questions/18989446/execute-python-function-in-main-thread-from-call-in-dummy-thread
-	"""
-	def __init__(self):
-		"""Internal variables."""
-	
-		self.callback_queue = queue.Queue()
-
-	def from_dummy_thread(self, myFunction, myFunctionArgs = None, myFunctionKwargs = None):
-		"""A function from a MyThread to be called in the main thread."""
-
-		self.callback_queue.put([myFunction, myFunctionArgs, myFunctionKwargs])
-
-	def from_main_thread(self, blocking = True, printEmpty = False):
-		"""An non-critical function from the sub-thread will run in the main thread.
-
-		blocking (bool) - If True: This is a non-critical function
-		"""
-
-		def setupFunction(myFunctionList, myFunctionArgsList, myFunctionKwargsList):
-			nonlocal self
-
-			#Skip empty functions
-			if (myFunctionList is not None):
-				myFunctionList, myFunctionArgsList, myFunctionKwargsList = Utilities_Base.formatFunctionInputList(self, myFunctionList, myFunctionArgsList, myFunctionKwargsList)
-				
-				#Run each function
-				answerList = []
-				for i, myFunction in enumerate(myFunctionList):
-					#Skip empty functions
-					if (myFunction is not None):
-						myFunctionEvaluated, myFunctionArgs, myFunctionKwargs = Utilities_Base.formatFunctionInput(self, i, myFunctionList, myFunctionArgsList, myFunctionKwargsList)
-						answer = runFunction(myFunctionEvaluated, myFunctionArgs, myFunctionKwargs)
-						answerList.append(answer)
-
-				#Account for just one function
-				if (len(answerList) == 1):
-					answerList = answerList[0]
-			return answerList
-
-		def runFunction(myFunction, myFunctionArgs, myFunctionKwargs):
-			"""Runs a function."""
-			nonlocal self
-
-			#Has both args and kwargs
-			if ((myFunctionKwargs is not None) and (myFunctionArgs is not None)):
-				answer = myFunction(*myFunctionArgs, **myFunctionKwargs)
-
-			#Has args, but not kwargs
-			elif (myFunctionArgs is not None):
-				answer = myFunction(*myFunctionArgs)
-
-			#Has kwargs, but not args
-			elif (myFunctionKwargs is not None):
-				answer = myFunction(**myFunctionKwargs)
-
-			#Has neither args nor kwargs
-			else:
-				answer = myFunction()
-
-			return answer
-
-		if (blocking):
-			myFunction, myFunctionArgs, myFunctionKwargs = self.callback_queue.get() #blocks until an item is available
-			answer = setupFunction(myFunction, myFunctionArgs, myFunctionKwargs)
-			
-		else:       
-			while True:
-				try:
-					myFunction, myFunctionArgs, myFunctionKwargs = self.callback_queue.get(False) #doesn't block
-				
-				except queue.Empty: #raised when queue is empty
-					if (printEmpty):
-						print("--- Thread Queue Empty ---")
-					answer = None
-					break
-
-				answer = setupFunction(myFunction, myFunctionArgs, myFunctionKwargs)
-
-		return answer
-
-class MyThread(threading.Thread):
-	"""Used to run functions in the background.
-	More information on threads can be found at: https://docs.python.org/3.4/library/threading.html
-	_________________________________________________________________________
-
-	CREATE AND RUN A NEW THREAD
-	#Create new threads
-	thread1 = myThread(1, "Thread-1", 1)
-	thread2 = myThread(2, "Thread-2", 2)
-
-	#Start new threads
-	thread1.start()
-	thread2.start()
-	_________________________________________________________________________
-
-	RUNNING A FUNCTION ON A THREAD
-	After the thread has been created and started, you can run functions on it like you do on the main thread.
-	The following code shows how to run functions on the new thread:
-
-	runFunction(longFunction, [1, 2], {label: "Lorem"}, self, False)
-	_________________________________________________________________________
-
-	If you exit the main thread, the other threads will still run.
-
-	EXAMPLE CREATING A THREAD THAT EXITS WHEN THE MAIN THREAD EXITS
-	If you want the created thread to exit when the main thread exits, make it a daemon thread.
-		thread1 = myThread(1, "Thread-1", 1, daemon = True)
-
-	You can also make it a daemon using the function:
-		thread1.setDaemon(True)
-	_________________________________________________________________________
-
-	CLOSING A THREAD
-	If any thread is open, the program will not end. To close a thread use return on the function that is running in the thread.
-	The thread will then close itself automatically.
-	"""
-
-	def __init__(self, threadID = None, name = None, counter = None, daemon = None):
-		"""Setup the thread.
-
-		threadID (int) -
-		name (str)     - The thread name. By default, a unique name is constructed of the form "Thread-N" where N is a small decimal number.
-		counter (int)  - 
-		daemon (bool)  - Sets whether the thread is daemonic. If None (the default), the daemonic property is inherited from the current thread.
-		
-		Example Input: MyThread()
-		Example Input: MyThread(1, "Thread-1", 1)
-		Example Input: MyThread(daemon = True)
-		"""
-
-		#Initialize the thread
-		threading.Thread.__init__(self, name = name, daemon = daemon)
-		# self.setDaemon(daemon)
-
-		#Setup thread properties
-		if (threadID is not None):
-			self.threadID = threadID
-
-		self.stopEvent = threading.Event() #Used to stop the thread
-
-		#Initialize internal variables
-		self.shown = None
-		self.window = None
-		self.myFunction = None
-		self.myFunctionArgs = None
-		self.myFunctionKwargs = None
-
-	def runFunction(self, myFunction, myFunctionArgs, myFunctionKwargs, window, shown):
-		"""Sets the function to run in the thread object.
-
-		myFunction (str)        - What function will be ran. Can a function object
-		myFunctionArgs (list)   - The arguments for 'myFunction'
-		myFunctionKwargs (dict) - The keyword arguments for 'myFunction'
-		window (wxFrame)        - The window that called this function
-		shown (bool)            - If True: The function will only run if the window is being shown. It will wait for the window to first be shown to run.
-								  If False: The function will run regardless of whether the window is being shown or not
-								  #### THIS IS NOT WORKING YET ####
-
-		Example Input: runFunction(longFunction, [1, 2], {label: "Lorem"}, 5, False)
-		"""
-
-		#Record given values
-		self.shown = shown
-		self.window = window
-		self.myFunction = myFunction
-		self.myFunctionArgs = myFunctionArgs
-		self.myFunctionKwargs = myFunctionKwargs
-		self.start()
-
-	def run(self):
-		"""Runs the thread and then closes it."""
-
-		if (self.shown):
-			#Wait until the window is shown to start
-			while True:
-				#Check if the thread should still run
-				if (self.stopEvent.is_set()):
-					return
-
-				#Check if the window is shown yet
-				if (self.window.showWindowCheck()):
-					break
-
-				#Reduce lag
-				time.sleep(0.01)
-
-		#Has both args and kwargs
-		if ((self.myFunctionKwargs is not None) and (self.myFunctionArgs is not None)):
-			self.myFunction(*self.myFunctionArgs, **self.myFunctionKwargs)
-
-		#Has args, but not kwargs
-		elif (self.myFunctionArgs is not None):
-			self.myFunction(*self.myFunctionArgs)
-
-		#Has kwargs, but not args
-		elif (self.myFunctionKwargs is not None):
-			self.myFunction(**self.myFunctionKwargs)
-
-		#Has neither args nor kwargs
-		else:
-			self.myFunction()
-
-	def stop(self):
-		"""Stops the running thread."""
-
-		self.stopEvent.set()
-
 #Utility Classes
-class Utilities_Base():
-	def __init__(self):
+class Utilities_Base(MyUtilities.common.Container, MyUtilities.common.EtcFunctions):
+	def __init__(self, *args, **kwargs):
 		"""Utility functions that everyone gets."""
 
-		pass
-
-	def __repr__(self):
-		representation = f"{type(self).__name__}(id = {id(self)})"
-		return representation
-
-	def __str__(self):
-		output = f"{type(self).__name__}()\n-- id: {id(self)}\n"
-		if (hasattr(self, "parent") and (self.parent is not None)):
-			output += f"-- Parent: {self.parent.__repr__()}\n"
-		if (hasattr(self, "root") and (self.root is not None)):
-			output += f"-- Root: {self.root.__repr__()}\n"
-		return output
-
-	def __len__(self):
-		return len(self[:])
-
-	def __contains__(self, key):
-		return self._get(key, returnExists = True)
-
-	def __iter__(self):
-		return Iterator(self.childCatalogue)
-
-	def __getitem__(self, key):
-		return self._get(key)
-
-	def __setitem__(self, key, value):
-		self.childCatalogue[key] = value
-
-	def __delitem__(self, key):
-		del self.childCatalogue[key]
-
-	def __enter__(self):			
-		return self
-
-	def __exit__(self, exc_type, exc_value, traceback):
-		if (traceback is not None):
-			print(exc_type, exc_value)
-			return False
-
-	def _get(self, itemLabel = None, returnExists = False, addNew = True):
-		"""Searches the label catalogue for the requested object.
-
-		itemLabel (any) - What the object is labled as in the catalogue
-			- If slice: objects will be returned from between the given spots 
-			- If None: Will return all that would be in an unbound slice
-		addNew (bool)   - Determines what happens if the requested child does not exists
-			- If True: Creates a new child
-			- If False: Throws an error
-
-		Example Input: _get()
-		Example Input: _get(0)
-		Example Input: _get(slice(None, None, None))
-		Example Input: _get(slice(2, 7, None))
-		"""
-
-		#Account for retrieving all nested
-		if (itemLabel is None):
-			itemLabel = slice(None, None, None)
-
-		#Account for indexing
-		if (isinstance(itemLabel, slice)):
-			if (itemLabel.step is not None):
-				raise FutureWarning(f"Add slice steps to _get() for indexing {self.__repr__()}")
-			
-			elif ((itemLabel.start is not None) and (itemLabel.start not in self.childCatalogue)):
-				errorMessage = f"There is no item labled {itemLabel.start} in the row catalogue for {self.__repr__()}"
-				raise KeyError(errorMessage)
-			
-			elif ((itemLabel.stop is not None) and (itemLabel.stop not in self.childCatalogue)):
-				errorMessage = f"There is no item labled {itemLabel.stop} in the row catalogue for {self.__repr__()}"
-				raise KeyError(errorMessage)
-
-			handleList = []
-			begin = False
-			for item in sorted(self.childCatalogue.keys()):
-				#Allow for slicing with non-integers
-				if ((not begin) and ((itemLabel.start is None) or (self.childCatalogue[item].label == itemLabel.start))):
-					begin = True
-				elif ((itemLabel.stop is not None) and (self.childCatalogue[item].label == itemLabel.stop)):
-					break
-
-				#Slice catalogue via creation date
-				if (begin):
-					handleList.append(self.childCatalogue[item])
-			answer = handleList
-
-		elif (itemLabel not in self.childCatalogue):
-			answer = None
-		else:
-			answer = self.childCatalogue[itemLabel]
-
-		if (returnExists):
-			return answer is not None
-
-		if (answer is not None):
-			if (isinstance(answer, (list, tuple, range))):
-				if (len(answer) == 1):
-					answer = answer[0]
-			return answer
-
-		if (addNew):
-			return self.add(itemLabel)
-		else:
-			errorMessage = f"There is no item labled {itemLabel} in the data catalogue for {self.__repr__()}"
-			raise KeyError(errorMessage)
-
-	#Background Processes
-	def passFunction(self, myFunction, myFunctionArgs = None, myFunctionKwargs = None, thread = None):
-		"""Passes a function from one thread to another. Used to pass the function
-		If a thread object is not given it will pass from the current thread to the main thread.
-		"""
-
-		#Get current thread
-		myThread = threading.current_thread()
-		mainThread = threading.main_thread()
-
-		#How this function will be passed
-		if (thread is not None):
-			pass
-
-		else:
-			if (myThread != mainThread):
-				self.controller.threadQueue.from_dummy_thread(myFunction, myFunctionArgs, myFunctionKwargs)
-
-			else:
-				warnings.warn(f"Cannot pass from the main thread to the main thread for {self.__repr__()}", Warning, stacklevel = 2)
-
-	def recieveFunction(self, blocking = True, printEmpty = False):
-		"""Passes a function from one thread to another. Used to recieve the function.
-		If a thread object is not given it will pass from the current thread to the main thread.
-		"""
-
-		self.controller.threadQueue.from_main_thread(blocking = blocking, printEmpty = printEmpty)
-
-	def backgroundRun(self, myFunction, myFunctionArgs = None, myFunctionKwargs = None, shown = False, makeThread = True):
-		"""Runs a function in the background in a way that it does not lock up the GUI.
-		Meant for functions that take a long time to run.
-		If makeThread is true, the new thread object will be returned to the user.
-
-		myFunction (str)       - The function that will be ran when the event occurs
-		myFunctionArgs (any)   - Any input arguments for myFunction. A list of multiple functions can be given
-		myFunctionKwargs (any) - Any input keyword arguments for myFunction. A list of variables for each function can be given. The index of the variables must be the same as the index for the functions
-		shown (bool)           - Determines when to run the function
-			- If True: The function will only run if the window is being shown. If the window is not shown, it will terminate the function. It will wait for the window to first be shown to run
-			- If False: The function will run regardless of whether the window is being shown or not
-		makeThread (bool)      - Determines if this function runs on a different thread
-			- If True: A new thread will be created to run the function
-			- If False: The function will only run while the GUI is idle. Note: This can cause lag. Use this for operations that must be in the main thread.
-
-		Example Input: backgroundRun(self.startupFunction)
-		Example Input: backgroundRun(self.startupFunction, shown = True)
-		"""
-
-		#Skip empty functions
-		if (myFunction is not None):
-			myFunctionList, myFunctionArgsList, myFunctionKwargsList = self.formatFunctionInputList(myFunction, myFunctionArgs, myFunctionKwargs)
-
-			#Run each function
-			for i, myFunction in enumerate(myFunctionList):
-
-				#Skip empty functions
-				if (myFunction is not None):
-					myFunctionEvaluated, myFunctionArgs, myFunctionKwargs = self.formatFunctionInput(i, myFunctionList, myFunctionArgsList, myFunctionKwargsList)
-
-					#Determine how to run the function
-					if (makeThread):
-						#Create parallel thread
-						thread = MyThread(daemon = True)
-						thread.runFunction(myFunctionEvaluated, myFunctionArgs, myFunctionKwargs, self, shown)
-						return thread
-					else:
-						#Add to the idling queue
-						if (self.idleQueue is not None):
-							self.idleQueue.append([myFunctionEvaluated, myFunctionArgs, myFunctionKwargs, shown])
-						else:
-							warnings.warn(f"The window {self} was given it's own idle function by the user for {self.__repr__()}", Warning, stacklevel = 2)
-				else:
-					warnings.warn(f"function {i} in myFunctionList is None for backgroundRun() for {self.__repr__()}", Warning, stacklevel = 2)
-		else:
-			warnings.warn(f"myFunction is None for backgroundRun() for {self.__repr__()}", Warning, stacklevel = 2)
-
-		return None
-
-	def formatFunctionInputList(self, myFunctionList, myFunctionArgsList, myFunctionKwargsList):
-		"""Formats the args and kwargs for various internal functions."""
-
-		#Ensure that multiple function capability is given
-		##Functions
-		if (myFunctionList is not None):
-			#Compensate for the user not making it a list
-			if (type(myFunctionList) != list):
-				if (type(myFunctionList) == tuple):
-					myFunctionList = list(myFunctionList)
-				else:
-					myFunctionList = [myFunctionList]
-
-			#Fix list order so it is more intuitive
-			if (len(myFunctionList) > 1):
-				myFunctionList.reverse()
-
-		##args
-		if (myFunctionArgsList is not None):
-			#Compensate for the user not making it a list
-			if (type(myFunctionArgsList) != list):
-				if (type(myFunctionArgsList) == tuple):
-					myFunctionArgsList = list(myFunctionArgsList)
-				else:
-					myFunctionArgsList = [myFunctionArgsList]
-
-			#Fix list order so it is more intuitive
-			if (len(myFunctionList) > 1):
-				myFunctionArgsList.reverse()
-
-			if (len(myFunctionList) == 1):
-				myFunctionArgsList = [myFunctionArgsList]
-
-		##kwargs
-		if (myFunctionKwargsList is not None):
-			#Compensate for the user not making it a list
-			if (type(myFunctionKwargsList) != list):
-				if (type(myFunctionKwargsList) == tuple):
-					myFunctionKwargsList = list(myFunctionKwargsList)
-				else:
-					myFunctionKwargsList = [myFunctionKwargsList]
-
-			#Fix list order so it is more intuitive
-			if (len(myFunctionList) > 1):
-				myFunctionKwargsList.reverse()
-
-		return myFunctionList, myFunctionArgsList, myFunctionKwargsList
-
-	def formatFunctionInput(self, i, myFunctionList, myFunctionArgsList, myFunctionKwargsList):
-		"""Formats the args and kwargs for various internal functions."""
-
-		myFunction = myFunctionList[i]
-
-		#Skip empty functions
-		if (myFunction is not None):
-			#Use the correct args and kwargs
-			if (myFunctionArgsList is not None):
-				myFunctionArgs = myFunctionArgsList[i]
-			else:
-				myFunctionArgs = myFunctionArgsList
-
-			if (myFunctionKwargsList is not None):
-				myFunctionKwargs = myFunctionKwargsList[i]
-				
-			else:
-				myFunctionKwargs = myFunctionKwargsList
-
-			#Check for User-defined function
-			if (type(myFunction) != str):
-				#The address is already given
-				myFunctionEvaluated = myFunction
-			else:
-				#Get the address of myFunction
-				myFunctionEvaluated = eval(myFunction, {'__builtins__': None}, {})
-
-			#Ensure the *args and **kwargs are formatted correctly 
-			if (myFunctionArgs is not None):
-				#Check for single argument cases
-				if ((type(myFunctionArgs) != list)):
-					#The user passed one argument that was not a list
-					myFunctionArgs = [myFunctionArgs]
-				# else:
-				#   if (len(myFunctionArgs) == 1):
-				#       #The user passed one argument that is a list
-				#       myFunctionArgs = [myFunctionArgs]
-
-			#Check for user error
-			if ((type(myFunctionKwargs) != dict) and (myFunctionKwargs is not None)):
-				errorMessage = f"myFunctionKwargs must be a dictionary for function {myFunctionEvaluated.__repr__()}"
-				raise ValueError(errorMessage)
-
-		return myFunctionEvaluated, myFunctionArgs, myFunctionKwargs
-
-	def getClosest(myList, number, returnLower = True, autoSort = False):
-		"""Returns the closest number in 'myList' to 'number'
-		Assumes myList is sorted.
-		Modified Code from: Lauritz V. Thaulow on https://stackoverflow.com/questions/12141150/from-list-of-integers-get-number-closest-to-a-given-value
-
-		myList (list) - The list to look through
-		number (int)  - The number to search with
-		returnLower (bool) - Determines what happens if 'number' is equadistant from the left and right bound.
-			- If True: Returns the left bound
-			- If False: Returns the right bound
-		autoSort (bool) - Determines if the list should be sorted before checking
-			- If True: Ensures the list is sorted
-			- If False: Assumes the list is sorted already
-
-		Example Input: getClosest([7, 15, 25, 30], 20))
-		"""
-
-		if (autoSort):
-			myList = sorted(myList)
-
-		position = bisect.bisect_left(myList, number)
-		if (position == 0):
-			answer = myList[0]
-
-		elif (position == len(myList)):
-			answer = myList[-1]
-
-		else:
-			before = myList[position - 1]
-			after = myList[position]
-
-			if (after - number < number - before):
-				answer = after
-			elif (returnLower):
-				answer = before
-			else:
-				answer = after
-
-		return answer
+		MyUtilities.common.Container.__init__(self, *args, **kwargs)
 
 class Utilities_Container(Utilities_Base):
 	def __init__(self, parent):
@@ -626,8 +75,6 @@ class Utilities_Container(Utilities_Base):
 		if (not hasattr(self, "parent")): self.parent = parent
 		if (not hasattr(self, "root")): self.root = self.parent
 		
-		self.childCatalogue = {}
-
 		#Initialize Inherited Modules
 		Utilities_Base.__init__(self)
 
@@ -641,12 +88,14 @@ class Utilities_Container(Utilities_Base):
 
 	def add(self, label = None):
 		"""Adds a new child.
+		If a child with the given label already exists, it will simply return the child instead of making a new one.
 
 		Example Input: add()
 		"""
 
-		child = self.Child(self, label)
-		return child
+		if (label in self):
+			return self[label]
+		return self.Child(self, label)
 
 	def remove(self, child = None):
 		"""Removes a child.
@@ -2760,7 +2209,8 @@ class Email(Utilities_Container):
 			server.sendmail(self.device["From"], address, self.device.as_string())
 			server.quit()
 
-class Communication():
+
+class CommunicationManager():
 	"""Helps the user to communicate with other devices.
 
 	CURRENTLY SUPPORTED METHODS
@@ -2811,5 +2261,78 @@ class Communication():
 
 		return [self.ethernet, self.comPort, self.usb, self.barcode, self.email]
 
+rootComManager = CommunicationManager()
+
+def getEthernet(label = None, *, comManager = None):
+	"""Returns an ethernet with the given label. If it does not exist, it will make one.
+
+	label (str) - What ethernet to get
+		- If None: Will make a new ethernet port
+
+	Example Input: getEthernet()
+	Example Input: getEthernet(1)
+	"""
+	global rootComManager
+	
+	comManager = MyUtilities.common.ensure_default(comManager, default = rootComManager)
+	return comManager.ethernet.add(label = label)
+
+def getCom(label = None, *, comManager = None):
+	"""Returns an com with the given label. If it does not exist, it will make one.
+
+	label (str) - What com to get
+		- If None: Will make a new com port
+
+	Example Input: getCom()
+	Example Input: getCom(1)
+	"""
+	global rootComManager
+	
+	comManager = MyUtilities.common.ensure_default(comManager, default = rootComManager)
+	return comManager.com.add(label = label)
+
+def getUsb(label = None, *, comManager = None):
+	"""Returns an usb with the given label. If it does not exist, it will make one.
+
+	label (str) - What usb to get
+		- If None: Will make a new usb port
+
+	Example Input: getusb()
+	Example Input: getusb(1)
+	"""
+	global rootComManager
+	
+	comManager = MyUtilities.common.ensure_default(comManager, default = rootComManager)
+	return comManager.usb.add(label = label)
+
+def getBarcode(label = None, *, comManager = None):
+	"""Returns an barcode with the given label. If it does not exist, it will make one.
+
+	label (str) - What barcode to get
+		- If None: Will make a new barcode port
+
+	Example Input: getBarcode()
+	Example Input: getBarcode(1)
+	"""
+	global rootComManager
+	
+	comManager = MyUtilities.common.ensure_default(comManager, default = rootComManager)
+	return comManager.barcode.add(label = label)
+
+def getEmail(label = None, *, comManager = None):
+	"""Returns an email with the given label. If it does not exist, it will make one.
+
+	label (str) - What email to get
+		- If None: Will make a new email port
+
+	Example Input: getEmail()
+	Example Input: getEmail(1)
+	"""
+	global rootComManager
+	
+	comManager = MyUtilities.common.ensure_default(comManager, default = rootComManager)
+	return comManager.email.add(label = label)
+
+
 if __name__ == '__main__':
-	com = build()
+	print(getEthernet())

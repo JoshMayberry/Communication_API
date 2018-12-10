@@ -1,17 +1,4 @@
 __version__ = "1.1.1"
-__about__ = """Helps the user to communicate with other devices.
-
-	CURRENTLY SUPPORTED METHODS
-		- COM Port
-		- Ethernet & Wi-fi
-		- Barcode
-		- QR Code
-		- USB
-		- Email
-
-	UPCOMING SUPPORTED METHODS
-		- Raspberry Pi GPIO
-	"""
 
 #Import standard elements
 import os
@@ -40,8 +27,16 @@ import xml.etree.cElementTree as xml
 from email import encoders as email_encoders
 from email.mime.base import MIMEBase as email_MIMEBase
 from email.mime.text import MIMEText as email_MIMEText
+from email.mime.image import MIMEImage as email_MIMEImage
 from email.mime.multipart import MIMEMultipart as email_MIMEMultipart
 
+import io
+import wx
+import glob
+import base64
+import tempfile
+
+import API_Database as Database
 import Utilities as MyUtilities
 
 #Required Modules
@@ -970,7 +965,8 @@ class Ethernet(Utilities_Container):
 			"""
 
 			if (clientIp not in self.clientDict):
-				warnings.warn(f"There is no client {clientIp} for this server", Warning, stacklevel = 2)
+				errorMessage = f"There is no client {clientIp} for this server"
+				raise ValueError(errorMessage)
 			else:
 				client = self.clientDict[clientIp]["device"]
 				client.close()
@@ -1437,12 +1433,14 @@ class ComPort(Utilities_Container):
 						self.parity = serial.PARITY_SPACE
 
 					else:
-						warnings.warn(f"There is no parity {value}", Warning, stacklevel = 2)
-						return False
+						errorMessage = f"There is no parity {value}"
+						raise KeyError(errorMessage)
+						# return False
 
 				else:
-					warnings.warn(f"There is no parity {value}", Warning, stacklevel = 2)
-					return False
+					errorMessage = f"There is no parity {value}"
+					raise KeyError(errorMessage)
+					# return False
 
 			else:
 				self.parity = serial.PARITY_NONE
@@ -1474,7 +1472,8 @@ class ComPort(Utilities_Container):
 				self.stopBits = serial.STOPBITS_ONE_POINT_FIVE
 
 			else:
-				warnings.warn(f"There is no stop bit {value} for {self.__repr__()}", Warning, stacklevel = 2)
+				errorMessage = f"There is no stop bit {value}"
+				raise KeyError(errorMessage)
 
 		def setTimeout(self, value = None):
 			"""Runs setTimeoutRead and setTimeoutWrite().
@@ -2081,6 +2080,7 @@ class Email(Utilities_Container):
 	Note: If you use gmail, make sure you allow less secure apps: https://myaccount.google.com/lesssecureapps?pli=1
 
 	Special thanks to Nael Shiab for how to send emails with attachments on http://naelshiab.com/tutorial-send-email-python/
+	Use: https://www.blog.pythonlibrary.org/2008/08/16/wxpymail-creating-an-application-to-send-emails/
 	
 	______________________ EXAMPLE USE ______________________
 	
@@ -2109,7 +2109,7 @@ class Email(Utilities_Container):
 			Utilities_Child.__init__(self, parent, label)
 		
 			#Internal Variables
-			self.device = None
+			self._from = None
 			self._password = None
 
 			self.current_config = None
@@ -2129,59 +2129,30 @@ class Email(Utilities_Container):
 			Example Input: open("lorem.ipsum@example.com", "LoremIpsum", server = "194.2.1.1", port = 587)
 			"""
 
-			self.device = email_MIMEMultipart()
-			self.device["From"] = address
+			self._from = address
 			self._password = password
-
-			self.attachBody = True
-			self.message_root = xml.Element('html')
-			self.message_body = xml.SubElement(self.message_root, 'body')
 
 			self.server = server or "smtp.gmail.com"
 			self.port = port or 587
 
-		def append(self, text, header = None, link = None):
-			"""Appends the given text to the email.
-			Use: https://stackoverflow.com/questions/882712/sending-html-email-using-python
-			Use: https://www.blog.pythonlibrary.org/2013/04/30/python-101-intro-to-xml-parsing-with-elementtree/
+			self.attachments = []
+			self.body = self.Body(self)
 
-			text (str) - What to append to the end of the email
+		def append(self, *args, **kwargs):
+			"""Appends the given text to the email.
 
 			Example Input: append("Lorem ipsum dolor sit amet")
-			Example Input: append("Lorem ipsum dolor sit amet", header = "Lorem Ipsum")
-			Example Input: append("Lorem ipsum dolor sit amet", link = "https://www.lipsum.com/")
 			"""
 
-			if (header):
-				paragraph = xml.SubElement(self.message_body, 'h2')
-				paragraph.text = header
+			return self.body.append(*args, **kwargs)
 
-			paragraph = xml.SubElement(self.message_body, 'p')
-			paragraph.text = text
-
-			if (link):
-				paragraph = xml.SubElement(self.message_body, 'a', attrib = {"href": link[0]})
-				paragraph.text = link[1]
-
-		def attach(self, filePath):
-			"""Attaches the file at the given path to the email.
-
-			filePath (str) - Where the file is located
+		def attach(self, *args, **kwargs):
+			"""Attaches the given object to the email.
 
 			Example Input: attach("example.txt")
 			"""
 
-			if (not os.path.exists(filePath)):
-				warnings.warn(f"There is no file {filePath}", Warning, stacklevel = 2)
-				return
-
-			attachment = email_MIMEBase('application', 'octet-stream')
-			attachment.set_payload(open(filePath, "rb").read())
-			
-			email_encoders.encode_base64(attachment)
-			attachment.add_header('Content-Disposition', f"attachment; filename = {os.path.basename(filePath)}")
-			 
-			self.device.attach(attachment)
+			self.attachments.append(self.Attachment(self, *args, **kwargs))
 
 		def send(self, address, subject = None, server = None, port = None):
 			"""Sends an email to the provided address.
@@ -2192,23 +2163,236 @@ class Email(Utilities_Container):
 			Example Input: send("dolor.sit@example.com")
 			Example Input: send("dolor.sit@example.com", subject = "Example")
 			"""
-			assert self.device is not None
+			assert self._from is not None
+
+			message = email_MIMEMultipart()
+			message["From"] = self._from
+			message["To"] = address
 
 			if (subject):
-				self.device["Subject"] = subject
-			if (self.attachBody):
-				self.device.attach(email_MIMEText(xml.tostring(self.message_root, method = "html").decode(), "html"))
-				self.attachBody = False
+				message["Subject"] = subject
 
-			port = int(port or self.port)
-			server = server or self.server
+			message.attach(self.body.generate())
 
-			server = smtplib.SMTP(server, port)
-			server.starttls()
-			server.login(self.device["From"], self._password)
-			server.sendmail(self.device["From"], address, self.device.as_string())
-			server.quit()
+			for attachmentHandle in self.attachments:
+				for item in attachmentHandle.generate():
+					message.attach(item)
 
+			with smtplib.SMTP(server or self.server, int(port or self.port)) as serverHandle:
+				serverHandle.starttls()
+				serverHandle.login(message["From"], self._password)
+				serverHandle.sendmail(message["From"], address, message.as_string())
+
+		class Body():
+			"""Holds the body of the email to send."""
+
+			def __init__(self, parent):
+				self.parent = parent
+
+				self.plainText = ""
+				self.attachBody = True
+				self.message_root = xml.Element("html")
+				self.message_body = xml.SubElement(self.message_root, "body")
+
+			def append(self, text, header = None, link = None):
+				"""Appends the given text to the email.
+				Use: https://stackoverflow.com/questions/882712/sending-html-email-using-python
+				Use: https://www.blog.pythonlibrary.org/2013/04/30/python-101-intro-to-xml-parsing-with-elementtree/
+
+				text (str) - What to append to the end of the email
+
+				Example Input: append("Lorem ipsum dolor sit amet")
+				Example Input: append("Lorem ipsum dolor sit amet", header = "Lorem Ipsum")
+				Example Input: append("Lorem ipsum dolor sit amet", link = ("https://www.lipsum.com/", "click here"))
+				"""
+
+				if (header):
+					paragraph = xml.SubElement(self.message_body, "h2")
+					paragraph.text = header
+
+					self.plainText += f"\t**{header}**\n"
+
+				paragraph = xml.SubElement(self.message_body, "p")
+				paragraph.text = text
+				
+				self.plainText += f"{text}\n"
+
+				if (link):
+					paragraph = xml.SubElement(self.message_body, "a", attrib = {"href": link[0]})
+					paragraph.text = link[1]
+
+					self.plainText += f"{link[1]}: {link[0]}\n"
+
+			def plain(self):
+				"""Returns the body of the message as plain text.
+
+				Example Input: plain()
+				"""
+
+				return self.plainText
+
+			def html(self):
+				"""Returns the MIME handle to attach to the email.
+
+				Example Input: html()
+				"""
+
+				return xml.tostring(self.message_root, method = "html").decode()
+
+			def generate(self, html = True):
+				"""Returns the MIME handle to attach to the email.
+
+				Example Input: generate()
+				"""
+
+				if (html):
+					return email_MIMEText(self.html(), "html")
+				else:
+					return email_MIMEText(self.plain(), "plain")
+
+
+		class Attachment():
+			"""An attachment to put on the email."""
+
+			def __init__(self, parent, source, *args, **kwargs):
+				"""Auto-detects how to attach 'source'.
+
+				source (any) - What to attach
+
+				Example Input: attach("example.txt")
+				Example Input: attach(bitmap, name = "screenshot")
+				"""
+
+				self.parent = parent
+				self.generate = NotImplementedError
+
+				if (isinstance(source, str)):
+					self.file_routine(source, *args, **kwargs)
+					return
+
+				if (isinstance(source, wx.Bitmap)):
+					self.wxBitmap_routine(source, *args, **kwargs)
+					return
+
+				if (isinstance(source, Database.Base)):
+					if (isinstance(source, Database.Configuration)):
+						self.config_routine(source, *args, override_readOnly = True, **kwargs)
+						return
+
+					if (isinstance(source, Database.Config_Base)):
+						self.config_routine(source, *args, ifDirty = False, removeDirty = False, applyOverride = False, **kwargs)
+						return
+
+					if (isinstance(source, Database.Database)):
+						self.sqlDatabase_routine(source, *args, **kwargs)
+						return
+
+				raise NotImplementedError(type(source))
+
+			def file_routine(self, source, name = None):
+				"""Sets up the attachment to add a file.
+
+				source (str) - Where the file to attach is located on disk
+
+				Example Input: attach("example.txt")
+				Example Input: attach("example.*")
+				"""
+
+				def yieldWalk():
+					for dirName, subdirList, fileList in os.walk(source):
+						for item in fileList:
+							yield os.path.join(dirName, item)
+
+				def yieldFilePaths(location):
+					if (os.path.isdir(location)):
+						pathList = yieldWalk()
+					else:
+						pathList = glob.iglob(location)
+
+					for filePath in pathList:
+						if (os.path.isdir(filePath)):
+							for item in yieldFilePaths(filePath):
+								yield item
+							continue
+
+						yield filePath
+
+				def _generateRoutine():
+					nonlocal self, pathList, name
+
+					for filePath in pathList:
+						with open(filePath, "rb") as fileHandle:
+							payload = fileHandle.read()
+
+						section = email_MIMEBase("application", "octet-stream")
+						section.set_payload(payload)
+						email_encoders.encode_base64(section)
+						
+						section.add_header("Content-Disposition", f"attachment; filename = {name or os.path.basename(filePath)}")
+						yield section
+
+				#################################################
+
+				pathList = tuple(yieldFilePaths(source))
+
+				self.generate = _generateRoutine
+
+			def wxBitmap_routine(self, source, name = None, *, imageType = "bmp"):
+				"""Sets up the attachment to add a wxBitmap.
+				Special thanks to the following for how to attach a wxBitmap object:
+					Kolmar on: https://stackoverflow.com/questions/27931079/base-64-encode-bitmap-from-wx-python/27931710#27931710
+					woss-2 on: http://wxpython-users.1045709.n5.nabble.com/Python-3-6-wx-4-0-0-RichtextCtrl-Export-and-import-text-in-xml-format-td5726961.html
+
+				source (wxBitmap) - A bitmap in memory to attach
+
+				Example Input: attach(bitmap)
+				Example Input: attach(bitmap, imageType = "png")
+				"""
+
+				def _generateRoutine():
+					nonlocal self, payload, name, imageType
+
+					yield email_MIMEImage(payload, name = f"{name or 'bitmap'}.{imageType}", _subtype = imageType)
+
+				#################################################
+
+				with io.BytesIO() as stream:
+					MyUtilities.wxPython.saveBitmap(source, stream, imageType = imageType)
+					payload = stream.getvalue()
+
+				self.generate = _generateRoutine
+
+			def config_routine(self, source, name = None, **kwargs):
+				"""Sets up the attachment to add a json, yaml, or configuration database handle.
+
+				Example Input: config_routine()
+				"""
+
+				def _generateRoutine():
+					nonlocal self, payload, name
+
+					section = email_MIMEText(payload)
+					section.add_header("Content-Disposition", "attachment", filename = name)
+					yield section
+
+				#################################################
+
+				name = name or os.path.basename(source.default_filePath) or "settings.ini"
+
+				with io.StringIO() as stream:
+					source.save(stream, closeIO = False, **kwargs)
+					payload = stream.getvalue()
+
+				self.generate = _generateRoutine
+
+			def sqlDatabase_routine(self, source, name = None):
+				"""Sets up the attachment to add a sql database handle.
+
+				Example Input: sqlDatabase_routine()
+				"""
+
+				print("@attach_sqlDatabase", [source])
+				raise NotImplementedError()
 
 class CommunicationManager():
 	"""Helps the user to communicate with other devices.
@@ -2261,10 +2445,10 @@ class CommunicationManager():
 
 		return [self.ethernet, self.comPort, self.usb, self.barcode, self.email]
 
-rootComManager = CommunicationManager()
+rootManager = CommunicationManager()
 
 def getEthernet(label = None, *, comManager = None):
-	"""Returns an ethernet with the given label. If it does not exist, it will make one.
+	"""Returns an ethernet handle with the given label. If it does not exist, it will make one.
 
 	label (str) - What ethernet to get
 		- If None: Will make a new ethernet port
@@ -2272,27 +2456,27 @@ def getEthernet(label = None, *, comManager = None):
 	Example Input: getEthernet()
 	Example Input: getEthernet(1)
 	"""
-	global rootComManager
+	global rootManager
 	
-	comManager = MyUtilities.common.ensure_default(comManager, default = rootComManager)
+	comManager = MyUtilities.common.ensure_default(comManager, default = rootManager)
 	return comManager.ethernet.add(label = label)
 
 def getCom(label = None, *, comManager = None):
-	"""Returns an com with the given label. If it does not exist, it will make one.
+	"""Returns a com port handle with the given label. If it does not exist, it will make one.
 
-	label (str) - What com to get
+	label (str) - What com port to get
 		- If None: Will make a new com port
 
 	Example Input: getCom()
 	Example Input: getCom(1)
 	"""
-	global rootComManager
+	global rootManager
 	
-	comManager = MyUtilities.common.ensure_default(comManager, default = rootComManager)
-	return comManager.com.add(label = label)
+	comManager = MyUtilities.common.ensure_default(comManager, default = rootManager)
+	return comManager.comPort.add(label = label)
 
 def getUsb(label = None, *, comManager = None):
-	"""Returns an usb with the given label. If it does not exist, it will make one.
+	"""Returns a usb handle with the given label. If it does not exist, it will make one.
 
 	label (str) - What usb to get
 		- If None: Will make a new usb port
@@ -2300,13 +2484,13 @@ def getUsb(label = None, *, comManager = None):
 	Example Input: getusb()
 	Example Input: getusb(1)
 	"""
-	global rootComManager
+	global rootManager
 	
-	comManager = MyUtilities.common.ensure_default(comManager, default = rootComManager)
+	comManager = MyUtilities.common.ensure_default(comManager, default = rootManager)
 	return comManager.usb.add(label = label)
 
 def getBarcode(label = None, *, comManager = None):
-	"""Returns an barcode with the given label. If it does not exist, it will make one.
+	"""Returns a barcode handle with the given label. If it does not exist, it will make one.
 
 	label (str) - What barcode to get
 		- If None: Will make a new barcode port
@@ -2314,13 +2498,13 @@ def getBarcode(label = None, *, comManager = None):
 	Example Input: getBarcode()
 	Example Input: getBarcode(1)
 	"""
-	global rootComManager
+	global rootManager
 	
-	comManager = MyUtilities.common.ensure_default(comManager, default = rootComManager)
+	comManager = MyUtilities.common.ensure_default(comManager, default = rootManager)
 	return comManager.barcode.add(label = label)
 
 def getEmail(label = None, *, comManager = None):
-	"""Returns an email with the given label. If it does not exist, it will make one.
+	"""Returns an email handle with the given label. If it does not exist, it will make one.
 
 	label (str) - What email to get
 		- If None: Will make a new email port
@@ -2328,9 +2512,9 @@ def getEmail(label = None, *, comManager = None):
 	Example Input: getEmail()
 	Example Input: getEmail(1)
 	"""
-	global rootComManager
+	global rootManager
 	
-	comManager = MyUtilities.common.ensure_default(comManager, default = rootComManager)
+	comManager = MyUtilities.common.ensure_default(comManager, default = rootManager)
 	return comManager.email.add(label = label)
 
 

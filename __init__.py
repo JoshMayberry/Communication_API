@@ -1,4 +1,5 @@
 import lazyLoad
+lazyLoad.load("wx", useCatalogue = False)
 lazyLoad.load(
 	"usb", 
 	"email", 
@@ -8,13 +9,20 @@ lazyLoad.load(
 	"qrcode", 
 	"barcode", 
 
+	"io", 
 	"xml", 
+	"glob", 
+	"base64" 
 	"bisect", 
 	"select", 
 	"netaddr", 
 	"smtplib", 
+
+	"API_Database", 
 ) 
+
 
 #Import the controller module as this namespace
 from .controller import *
+__version__ = controller.__version__
 del controller

@@ -1,7 +1,9 @@
 __version__ = "1.1.1"
 
 #Import standard elements
+import re
 import os
+import sys
 import warnings
 import traceback
 import threading
@@ -34,7 +36,9 @@ import io
 import wx
 import glob
 import base64
-import tempfile
+import zipfile
+import collections
+# import tempfile
 
 import API_Database as Database
 import Utilities as MyUtilities
@@ -2136,6 +2140,7 @@ class Email(Utilities_Container):
 			self.port = port or 587
 
 			self.attachments = []
+			self.zipCatalogue = collections.defaultdict(list)
 			self.body = self.Body(self)
 
 		def append(self, *args, **kwargs):
@@ -2152,7 +2157,7 @@ class Email(Utilities_Container):
 			Example Input: attach("example.txt")
 			"""
 
-			self.attachments.append(self.Attachment(self, *args, **kwargs))
+			return self.Attachment(self, *args, **kwargs)
 
 		def send(self, address, subject = None, server = None, port = None):
 			"""Sends an email to the provided address.
@@ -2163,6 +2168,28 @@ class Email(Utilities_Container):
 			Example Input: send("dolor.sit@example.com")
 			Example Input: send("dolor.sit@example.com", subject = "Example")
 			"""
+
+			def yieldAttachments():
+				for attachmentHandle in self.attachments:
+					for item in attachmentHandle.yieldMime():
+						yield item
+
+			def yieldZip():
+				for zip_label, attachments in self.zipCatalogue.items():
+					with io.BytesIO() as stream:
+						with zipfile.ZipFile(stream, mode = "w") as zipHandle:
+							for attachmentHandle in attachments:
+								for payload, name in attachmentHandle.yieldPayload():
+									zipHandle.writestr(name, payload)
+
+						section = email_MIMEBase('application', 'zip')
+						section.set_payload(stream.getvalue())
+						email_encoders.encode_base64(section)
+						section.add_header('Content-Disposition', 'attachment',  filename = f"{zip_label}.zip")
+						yield section
+
+			########################################
+
 			assert self._from is not None
 
 			message = email_MIMEMultipart()
@@ -2172,11 +2199,14 @@ class Email(Utilities_Container):
 			if (subject):
 				message["Subject"] = subject
 
-			message.attach(self.body.generate())
+			for item in self.body.yieldMime():
+				message.attach(item)
 
-			for attachmentHandle in self.attachments:
-				for item in attachmentHandle.generate():
-					message.attach(item)
+			for item in yieldAttachments():
+				message.attach(item)
+
+			for item in yieldZip():
+				message.attach(item)
 
 			with smtplib.SMTP(server or self.server, int(port or self.port)) as serverHandle:
 				serverHandle.starttls()
@@ -2213,8 +2243,8 @@ class Email(Utilities_Container):
 					self.plainText += f"\t**{header}**\n"
 
 				paragraph = xml.SubElement(self.message_body, "p")
+
 				paragraph.text = text
-				
 				self.plainText += f"{text}\n"
 
 				if (link):
@@ -2237,34 +2267,42 @@ class Email(Utilities_Container):
 				Example Input: html()
 				"""
 
-				return xml.tostring(self.message_root, method = "html").decode()
+				text = xml.tostring(self.message_root, method = "html").decode()
+				return text.replace("\n", "<br>")
 
-			def generate(self, html = True):
+			def yieldMime(self, html = True):
 				"""Returns the MIME handle to attach to the email.
 
-				Example Input: generate()
+				Example Input: yieldMime()
 				"""
 
 				if (html):
-					return email_MIMEText(self.html(), "html")
+					yield email_MIMEText(self.html(), "html")
 				else:
-					return email_MIMEText(self.plain(), "plain")
-
+					yield email_MIMEText(self.plain(), "plain")
 
 		class Attachment():
 			"""An attachment to put on the email."""
 
-			def __init__(self, parent, source, *args, **kwargs):
+			def __init__(self, parent, source, *args, zip_label = None, **kwargs):
 				"""Auto-detects how to attach 'source'.
 
 				source (any) - What to attach
+				zip_label (str) - What zip folder to put this attachment in
+					- If None: Will not zip this attachment
 
 				Example Input: attach("example.txt")
 				Example Input: attach(bitmap, name = "screenshot")
 				"""
 
 				self.parent = parent
-				self.generate = NotImplementedError
+				self.yieldPayload = NotImplementedError #Yields (payload, name)
+				self.yieldMime = NotImplementedError #Yields MIME handles
+
+				if (zip_label):
+					self.parent.zipCatalogue[zip_label].append(self)
+				else:
+					self.parent.attachments.append(self)
 
 				if (isinstance(source, str)):
 					self.file_routine(source, *args, **kwargs)
@@ -2276,15 +2314,16 @@ class Email(Utilities_Container):
 
 				if (isinstance(source, Database.Base)):
 					if (isinstance(source, Database.Configuration)):
-						self.config_routine(source, *args, override_readOnly = True, **kwargs)
+						self.database_routine(source, *args, override_readOnly = True, **kwargs)
 						return
 
 					if (isinstance(source, Database.Config_Base)):
-						self.config_routine(source, *args, ifDirty = False, removeDirty = False, applyOverride = False, **kwargs)
+						self.database_routine(source, *args, ifDirty = False, removeDirty = False, applyOverride = False, **kwargs)
 						return
 
 					if (isinstance(source, Database.Database)):
-						self.sqlDatabase_routine(source, *args, **kwargs)
+						_defaultName = re.split("\.", os.path.basename(source.baseFileName))[0]
+						self.database_routine(source, *args, _defaultName = f"{_defaultName}.sql", **kwargs)
 						return
 
 				raise NotImplementedError(type(source))
@@ -2317,25 +2356,31 @@ class Email(Utilities_Container):
 
 						yield filePath
 
-				def _generateRoutine():
+				def _baseRoutine():
 					nonlocal self, pathList, name
 
 					for filePath in pathList:
 						with open(filePath, "rb") as fileHandle:
-							payload = fileHandle.read()
+							yield fileHandle.read(), name or os.path.basename(filePath)
+
+				def _mimeRoutine():
+					nonlocal self
+
+					for _payload, _name in _baseRoutine():
 
 						section = email_MIMEBase("application", "octet-stream")
-						section.set_payload(payload)
+						section.set_payload(_payload)
 						email_encoders.encode_base64(section)
 						
-						section.add_header("Content-Disposition", f"attachment; filename = {name or os.path.basename(filePath)}")
+						section.add_header("Content-Disposition", f"attachment; filename = {_name}")
 						yield section
 
 				#################################################
 
 				pathList = tuple(yieldFilePaths(source))
 
-				self.generate = _generateRoutine
+				self.yieldPayload = _baseRoutine
+				self.yieldMime = _mimeRoutine
 
 			def wxBitmap_routine(self, source, name = None, *, imageType = "bmp"):
 				"""Sets up the attachment to add a wxBitmap.
@@ -2349,10 +2394,16 @@ class Email(Utilities_Container):
 				Example Input: attach(bitmap, imageType = "png")
 				"""
 
-				def _generateRoutine():
+				def _baseRoutine():
 					nonlocal self, payload, name, imageType
 
-					yield email_MIMEImage(payload, name = f"{name or 'bitmap'}.{imageType}", _subtype = imageType)
+					yield payload, f"{name or 'bitmap'}.{imageType}"
+
+				def _mimeRoutine():
+					nonlocal self, imageType
+
+					for _payload, _name in _baseRoutine():
+						yield email_MIMEImage(_payload, name = _name, _subtype = imageType)
 
 				#################################################
 
@@ -2360,39 +2411,36 @@ class Email(Utilities_Container):
 					MyUtilities.wxPython.saveBitmap(source, stream, imageType = imageType)
 					payload = stream.getvalue()
 
-				self.generate = _generateRoutine
+				self.yieldPayload = _baseRoutine
+				self.yieldMime = _mimeRoutine
 
-			def config_routine(self, source, name = None, **kwargs):
-				"""Sets up the attachment to add a json, yaml, or configuration database handle.
+			def database_routine(self, source, name = None, *, _defaultName = None, **kwargs):
+				"""Sets up the attachment to add a json, yaml, configuration, or sql database handle.
 
-				Example Input: config_routine()
+				Example Input: database_routine()
 				"""
 
-				def _generateRoutine():
+				def _baseRoutine():
 					nonlocal self, payload, name
 
-					section = email_MIMEText(payload)
-					section.add_header("Content-Disposition", "attachment", filename = name)
-					yield section
+					yield payload, name or _defaultName or os.path.basename(source.default_filePath) or f"settings.{source.defaultFileExtension}"
+
+				def _mimeRoutine():
+					nonlocal self
+
+					for _payload, _name in _baseRoutine():
+						section = email_MIMEText(_payload)
+						section.add_header("Content-Disposition", "attachment", filename = _name)
+						yield section
 
 				#################################################
-
-				name = name or os.path.basename(source.default_filePath) or "settings.ini"
 
 				with io.StringIO() as stream:
 					source.save(stream, closeIO = False, **kwargs)
 					payload = stream.getvalue()
 
-				self.generate = _generateRoutine
-
-			def sqlDatabase_routine(self, source, name = None):
-				"""Sets up the attachment to add a sql database handle.
-
-				Example Input: sqlDatabase_routine()
-				"""
-
-				print("@attach_sqlDatabase", [source])
-				raise NotImplementedError()
+				self.yieldPayload = _baseRoutine
+				self.yieldMime = _mimeRoutine
 
 class CommunicationManager():
 	"""Helps the user to communicate with other devices.
@@ -2516,7 +2564,7 @@ def getEmail(label = None, *, comManager = None):
 	
 	comManager = MyUtilities.common.ensure_default(comManager, default = rootManager)
 	return comManager.email.add(label = label)
-
+	
 
 if __name__ == '__main__':
 	print(getEthernet())

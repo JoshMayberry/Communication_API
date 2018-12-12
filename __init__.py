@@ -12,7 +12,9 @@ lazyLoad.load(
 	"io", 
 	"xml", 
 	"glob", 
-	"base64" 
+	"base64", 
+	"zipfile", 
+
 	"bisect", 
 	"select", 
 	"netaddr", 

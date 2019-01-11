@@ -9,39 +9,38 @@ import traceback
 import threading
 import subprocess
 
-#Import communication elements for talking to other devices such as printers, the internet, a raspberry pi, etc.
-import usb
-import types
-import bisect
-import select
+# #Import communication elements for talking to other devices such as printers, the internet, a raspberry pi, etc.
+# import usb
+# import types
+# import bisect
+# import select
 import socket
-import serial
-import netaddr
-import serial.tools.list_ports
+# import serial
+# import netaddr
+# import serial.tools.list_ports
 
-#Import barcode modules for drawing and decoding barcodes
-import qrcode
-import barcode
+# #Import barcode modules for drawing and decoding barcodes
+# import qrcode
+# import barcode
 
-#Import email modules for sending and viewing emails
-import smtplib
-import xml.etree.cElementTree as xml
-from email import encoders as email_encoders
-from email.mime.base import MIMEBase as email_MIMEBase
-from email.mime.text import MIMEText as email_MIMEText
-from email.mime.image import MIMEImage as email_MIMEImage
-from email.mime.multipart import MIMEMultipart as email_MIMEMultipart
+# #Import email modules for sending and viewing emails
+# import smtplib
+# import xml.etree.cElementTree as xml
+# from email import encoders as email_encoders
+# from email.mime.base import MIMEBase as email_MIMEBase
+# from email.mime.text import MIMEText as email_MIMEText
+# from email.mime.image import MIMEImage as email_MIMEImage
+# from email.mime.multipart import MIMEMultipart as email_MIMEMultipart
 
-import io
-import wx
-import glob
-import base64
-import zipfile
-import collections
-# import tempfile
+# import io
+# import wx
+# import glob
+# import base64
+# import zipfile
+# import collections
 
 import API_Database as Database
-import Utilities as MyUtilities
+import MyUtilities.common
 
 #Required Modules
 ##py -m pip install
@@ -221,6 +220,9 @@ class USB(Utilities_Container):
 
 		Example Input: getAll()
 		"""
+
+		#See: https://github.com/pyusb/pyusb/issues/203
+		raise NotImplementedError()
 
 		valueList = []
 		devices = usb.core.find(find_all=True)
@@ -2564,7 +2566,21 @@ def getEmail(label = None, *, comManager = None):
 	
 	comManager = MyUtilities.common.ensure_default(comManager, default = rootManager)
 	return comManager.email.add(label = label)
-	
+
+# def runFile():
+
 
 if __name__ == '__main__':
-	print(getEthernet())
+	# print(getEthernet())
+	# for item in rootManager.comPort.getAll():
+	# 	print(item["vendorId"], item["productId"])
+
+
+	import time
+	import subprocess
+	subprocess.Popen(["py", "maintenance.py"]) #https://docs.python.org/2/library/os.html#os.startfile
+	print("@1.2")
+	time.sleep(1)
+	print("@1.3")
+	sys.exit()
+

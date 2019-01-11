@@ -1,27 +1,27 @@
-import lazyLoad
-lazyLoad.load("wx", useCatalogue = False)
-lazyLoad.load(
-	"usb", 
-	"email", 
-	"socket", 
-	"serial", 
+# import lazyLoad
+# lazyLoad.load("wx", useCatalogue = False)
+# lazyLoad.load(
+# 	"usb", 
+# 	"email", 
+# 	"socket", 
+# 	"serial", 
 
-	"qrcode", 
-	"barcode", 
+# 	"qrcode", 
+# 	"barcode", 
 
-	"io", 
-	"xml", 
-	"glob", 
-	"base64", 
-	"zipfile", 
+# 	"io", 
+# 	"xml", 
+# 	"glob", 
+# 	"base64", 
+# 	"zipfile", 
 
-	"bisect", 
-	"select", 
-	"netaddr", 
-	"smtplib", 
+# 	"bisect", 
+# 	"select", 
+# 	"netaddr", 
+# 	"smtplib", 
 
-	"API_Database", 
-) 
+# 	"API_Database", 
+# ) 
 
 
 #Import the controller module as this namespace

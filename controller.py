@@ -10,34 +10,34 @@ import threading
 import subprocess
 
 # #Import communication elements for talking to other devices such as printers, the internet, a raspberry pi, etc.
-# import usb
-# import types
-# import bisect
-# import select
+import usb
+import types
+import bisect
+import select
 import socket
-# import serial
-# import netaddr
-# import serial.tools.list_ports
+import serial
+import netaddr
+import serial.tools.list_ports
 
 # #Import barcode modules for drawing and decoding barcodes
-# import qrcode
-# import barcode
+import qrcode
+import barcode
 
 # #Import email modules for sending and viewing emails
-# import smtplib
-# import xml.etree.cElementTree as xml
-# from email import encoders as email_encoders
-# from email.mime.base import MIMEBase as email_MIMEBase
-# from email.mime.text import MIMEText as email_MIMEText
-# from email.mime.image import MIMEImage as email_MIMEImage
-# from email.mime.multipart import MIMEMultipart as email_MIMEMultipart
+import smtplib
+import xml.etree.cElementTree as xml
+from email import encoders as email_encoders
+from email.mime.base import MIMEBase as email_MIMEBase
+from email.mime.text import MIMEText as email_MIMEText
+from email.mime.image import MIMEImage as email_MIMEImage
+from email.mime.multipart import MIMEMultipart as email_MIMEMultipart
 
-# import io
-# import wx
-# import glob
-# import base64
-# import zipfile
-# import collections
+import io
+import wx
+import glob
+import base64
+import zipfile
+import collections
 
 import API_Database as Database
 import MyUtilities.common

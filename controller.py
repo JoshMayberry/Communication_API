@@ -35,6 +35,7 @@ from email.mime.multipart import MIMEMultipart as email_MIMEMultipart
 import io
 import wx
 import glob
+import PIL
 import base64
 import zipfile
 import collections
@@ -1931,7 +1932,7 @@ class Barcode(Utilities_Container):
 
 			if (percent not in self.qrcode_correctionCatalogue):
 				if (isinstance(percent, (int, float))):
-					percent = self.getClosest([7, 15, 25, 30], percent)
+					percent = self.getClosest((7, 15, 25, 30), percent)
 				else:
 					percent = 15
 			self.correction = self.qrcode_correctionCatalogue[percent]
@@ -1991,7 +1992,7 @@ class Barcode(Utilities_Container):
 			self.color_background = background
 
 		def create(self, text, codeType = None, filePath = None, size = None, pixelSize = None, borderSize = None, 
-			correction = None, color_foreground = None, color_background = None):
+			correction = None, color_foreground = None, color_background = None, logo = None, logoSize = None):
 			"""Returns a PIL image of the barcode for the user or saves it somewhere as an image.
 			Use: https://ourcodeworld.com/articles/read/554/how-to-create-a-qr-code-image-or-svg-in-python
 
@@ -2024,6 +2025,11 @@ class Barcode(Utilities_Container):
 				elif (self.borderSize is None):
 					self.borderSize = 4
 
+				if (logoSize is not None):
+					self.logoSize = logoSize
+				elif (self.logoSize is None):
+					self.logoSize = 10
+
 				if (color_foreground is not None):
 					self.color_foreground = color_foreground
 				elif (self.color_foreground is None):
@@ -2048,6 +2054,14 @@ class Barcode(Utilities_Container):
 				self.device.make(fit = True)
 				self.image = self.device.make_image(fill_color = self.color_foreground, back_color = self.color_background)
 
+				if (logo is not None):
+					#See: https://docs.eyesopen.com/toolkits/cookbook/python/image-manipulation/addlogo.html#solution
+					image_logo = PIL.Image.open(logo)
+					if (self.logoSize > 0):
+						newSize = self.logoSize / 100
+						image_logo = image_logo.resize((int(self.image.size[0] * newSize), int(self.image.size[1] * newSize)))
+					self.image.paste(image_logo, (int(self.image.size[0] / 2 - image_logo.size[0] / 2), int(self.image.size[1] / 2 - image_logo.size[1] / 2)))
+
 			else:
 				self.device = barcode.get(self.type, f"{text}", writer = barcode.writer.ImageWriter())
 				self.image = self.device.render(writer_options = None)
@@ -2066,6 +2080,11 @@ class Barcode(Utilities_Container):
 			"""Returns the barcode."""
 
 			return self.image
+
+		def save(self, filePath):
+			"""Saves the barcode as an image."""
+
+			self.image.save(filePath)
 
 		def getBestSize(self, text):
 			"""Returns what qr code version would be applied to keep the barcode small.

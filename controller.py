@@ -60,19 +60,6 @@ import MyUtilities.threadManager
 #User Access Variables
 ethernetError = socket.error
 
-
-
-#API Library
-
-
-
-
-
-
-
-
-
-
 class CommunicationManager():
 	"""Helps the user to communicate with other devices.
 

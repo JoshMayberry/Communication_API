@@ -25,6 +25,6 @@
 
 
 #Import the controller module as this namespace
-from .controller import *
-__version__ = controller.__version__
-del controller
+# from .controller import *
+# __version__ = controller.__version__
+# del controller

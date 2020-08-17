@@ -25,8 +25,8 @@ from email.mime.text import MIMEText as email_MIMEText
 from email.mime.image import MIMEImage as email_MIMEImage
 from email.mime.multipart import MIMEMultipart as email_MIMEMultipart
 
-import API_Com.utilities
-import API_Database as Database
+import MyUtilities.wxPython
+# import API_Database as Database
 
 class ConnectionAlreadyOpenError(Exception):
 	pass
@@ -56,7 +56,7 @@ class EmailServer():
 		self.current_address = None
 
 	@contextlib.contextmanager
-	def openRead(self, address, password, host, port = None, encrypt = True):
+	def openRead(self, address, password, host, port = None, encrypt = True, **kwargs):
 		"""Opens a connection to an email for reading
 
 		address (str) - A valid email address to send from
@@ -89,7 +89,7 @@ class EmailServer():
 		self.current_sendMode = None
 
 	@contextlib.contextmanager
-	def openWrite(self, address, password, host, port = None, encrypt = True):
+	def openWrite(self, address, password, host, port = None, encrypt = True, **kwargs):
 		"""Opens a connection to an email for writing.
 
 		address (str) - A valid email address to send from
@@ -199,7 +199,7 @@ class EmailServer():
 
 		return dict(catalogue)
 
-	def search(self, serverHandle, keyword = None, folderName = None, fromFilter = None):
+	def search(self, serverHandle, keyword = None, folderName = None, fromFilter = None, **kwargs):
 		"""Searches the email server for teh given keyword.
 
 		keyword (str) - What to search for
@@ -237,13 +237,20 @@ class EmailServer():
 			yield emailHandle
 
 	@contextlib.contextmanager
-	def sendEmail(self, serverHandle, address, subject = None):
+	def sendEmail(self, serverHandle, address, subject = None, *, testing_doNotSend = False, testing_printEmail = False, **kwargs):
 		messageHandle = self.EmailMessage(self)
 
 		yield messageHandle
 
 		message = messageHandle.build(address = address, subject = subject)
-		serverHandle.sendmail(message["From"], address, message.as_string())
+
+		if (testing_doNotSend):
+			print(f"An email would have been sent to {address} from {message['From']}")
+		else:
+			serverHandle.sendmail(message["From"], address, message.as_string())
+
+		if (testing_printEmail):
+			print(message.as_string())
 
 	def test_search(self):
 		with self.openRead(address = "omnitraks@decaturmold.com", password = "Fu3lu$@g3", host = "194.2.1.1") as serverHandle:
@@ -366,7 +373,7 @@ class EmailServer():
 				element = xml.SubElement(xmlHandle, tag, attrib = attributes or {})
 				
 				if (text):
-					element.text = text.replace("\n", "<br>")
+					element.text = text
 					self.plainText += f"{prePlainText or ''}{text}{postPlainText or ''}\n"
 
 				if (returnWrapper):
@@ -657,7 +664,7 @@ def sendEmail(address_from, address_to, *, emailServer = None, **kwargs):
 		emailServer = EmailServer()
 
 	with emailServer.openWrite(address = address_from, **kwargs) as serverHandle:
-		with emailServer.sendEmail(serverHandle, address = address_to) as messageHandle:
+		with emailServer.sendEmail(serverHandle, address = address_to, **kwargs) as messageHandle:
 			yield messageHandle
 
 if (__name__ == "__main__"):

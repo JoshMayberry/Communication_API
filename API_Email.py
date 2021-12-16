@@ -17,6 +17,7 @@ import collections
 import ssl
 import imaplib
 import smtplib
+import exchangelib
 import xml.etree.cElementTree as xml
 
 import email
@@ -33,6 +34,102 @@ class ConnectionAlreadyOpenError(Exception):
 
 class SearchError(Exception):
 	pass
+
+class ExchangeServer():
+	@contextlib.contextmanager
+	def open(self, address, password, host = None):
+		""" Opens a connection to an email for reading
+		Use: https://resources.hacware.com/connecting-to-the-ews-with-python-using-exchangelib-2/
+		"""
+
+		credentials = exchangelib.Credentials(address, password)
+
+		if (host):
+			config = exchangelib.Configuration(server = host, credentials = credentials)
+			yield exchangelib.Account(address, config = config, autodiscover = False, access_type = exchangelib.DELEGATE)
+		else:
+			yield exchangelib.Account(address, credentials = credentials, autodiscover = True)
+
+
+	def searchableFields(self):
+		# Use: https://ecederstrand.github.io/exchangelib/#searching
+		return sorted([f.name for f in exchangelib.Message.FIELDS if f.is_searchable])
+
+	def search(self, serverHandle, *, folderName = None, filterKwargs = None, excludeKwargs = None,
+		orderArgs = None, onlyArgs = None, limit = 10, **kwargs):
+		""" Searches the email server for the given keyword.
+		Use: https://ecederstrand.github.io/exchangelib/#searching
+
+		Example Input: search(serverHandle)
+		Example Input: search(serverHandle, filterKwargs = { "subject__contains": "Lorem" })
+		Example Input: search(serverHandle, filterKwargs = { "start__range": (datetime.datetime(2017, 1, 1, tzinfo=serverHandle.default_timezone), datetime.datetime(2018, 1, 1, tzinfo=serverHandle.default_timezone)) })
+		Example Input: search(serverHandle, excludeKwargs = { "categories__icontains": "Lorem" })
+		Example Input: search(serverHandle, orderArgs = ["-datetime_received"])
+		Example Input: search(serverHandle, onlyArgs = ["subject", "start"])
+		Example Input: search(serverHandle, limit = None)
+		Example Input: search(serverHandle, limit = { "start": 2, "end": 6 })
+		"""
+
+		folder = serverHandle[folderName] if folderName else serverHandle.inbox
+
+		generator = folder.all()
+
+		if (filterKwargs):
+			generator = generator.filter(**filterKwargs)
+
+		if (excludeKwargs):
+			generator = generator.exclude(**excludeKwargs)
+
+		if (orderArgs):
+			generator = generator.order_by(*orderArgs)
+
+		if (onlyArgs):
+			generator = generator.only(*onlyArgs)
+
+		if (limit):
+			if (isinstance(limit, int)):
+				generator = generator[:limit]
+			else:
+				generator = generator[limit.get("start", 0):limit.get("end", -1):limit.get("step", 1)]
+
+		yield from generator
+
+	def forward(self, emailHandle, addressList, subject = None, body = None, *, body_html = None, **kwargs):
+		""" Forwards a message.
+		Use: https://ecederstrand.github.io/exchangelib/#creating-updating-deleting-sending-moving-archiving-marking-as-junk
+
+		Example Input: forward(emailHandle, ["lorem.ipsum@dolor.sit"])
+		Example Input: forward(emailHandle, ["lorem.ipsum@dolor.sit"], subject = "Lorem", body = "Ipsum")
+		Example Input: forward(emailHandle, ["lorem.ipsum@dolor.sit"], subject = "Lorem", body_html = "<html><body>Ipsum</body></html>")
+		"""
+
+		if (body_html):
+			body = exchangelib.HTMLBody(body_html)
+
+		elif (not body):
+			body = ""
+
+		if (not subject):
+			subject = f"FW: {emailHandle.subject}"
+
+		emailHandle.forward(to_recipients = addressList, subject = subject, body = body, **kwargs)
+
+	def test_search(self):
+		print("@test.1")
+		with self.open(address = "josh.mayberry@decaturmold.com", password = "type password here", host = "outlook.office365.com") as serverHandle:
+			print("@test.2", [serverHandle])
+			for emailHandle in self.search(serverHandle):
+				print("@test.3", emailHandle.subject)
+
+		# with self.open(address = "dmtebi@decaturmold.com", password = "M3$$3r$m1th262", host = "mail.decaturmold.com") as serverHandle:
+		# 	for emailHandle in self.search(serverHandle,
+		# 		filterKwargs = {
+		# 			"subject__contains": "Daily Sales Report",
+		# 			"datetime_received__gte": (datetime.datetime.now(serverHandle.default_timezone) - datetime.timedelta(days = 1)),
+		# 		},
+		# 		orderArgs = ["-datetime_received"],
+		# 	):
+		# 		self.forward(emailHandle, ["josh.mayberry@decaturmold.com"])
 
 class EmailServer():
 	"""A controller for a Email connection.
@@ -56,7 +153,7 @@ class EmailServer():
 		self.current_address = None
 
 	@contextlib.contextmanager
-	def openRead(self, address, password, host, port = None, encrypt = True, **kwargs):
+	def openRead(self, address, password, host, port = None, *, encrypt = True, **kwargs):
 		"""Opens a connection to an email for reading
 
 		address (str) - A valid email address to send from
@@ -76,17 +173,19 @@ class EmailServer():
 		self.current_address = address
 		self.current_readMode = True
 
-		with imaplib.IMAP4(host = host or "imap4.gmail.com", port = int(port or 143)) as serverHandle:
-			if (encrypt):
-				serverHandle.starttls()
+		try:
+			with imaplib.IMAP4(host = host or "imap4.gmail.com", port = int(port or 143)) as serverHandle:
+				if (encrypt):
+					serverHandle.starttls()
 
-			serverHandle.login(address, password)
-			serverHandle.select("Inbox")
+				serverHandle.login(address, password)
+				serverHandle.select("Inbox")
 
-			yield serverHandle
+				yield serverHandle
 
-		self.current_address = None
-		self.current_sendMode = None
+		finally:
+			self.current_address = None
+			self.current_sendMode = None
 
 	@contextlib.contextmanager
 	def openWrite(self, address, password, host, port = None, encrypt = True, **kwargs):
@@ -147,8 +246,9 @@ class EmailServer():
 			print('Send mail abnormal, ', str(error))
 			raise error
 
-		self.current_address = None
-		self.current_sendMode = None
+		finally:
+			self.current_address = None
+			self.current_sendMode = None
 
 	def email_toDict(self, emailHandle, include_plainBody = True, include_htmlBody = False, include_csv = False, include_attachment = False):
 		"""Converts an email into a dictionary.
@@ -200,7 +300,7 @@ class EmailServer():
 		return dict(catalogue)
 
 	def search(self, serverHandle, keyword = None, folderName = None, fromFilter = None, **kwargs):
-		"""Searches the email server for teh given keyword.
+		"""Searches the email server for the given keyword.
 
 		keyword (str) - What to search for
 			~ If None: returns all contents of *folderName*
@@ -237,30 +337,35 @@ class EmailServer():
 			yield emailHandle
 
 	@contextlib.contextmanager
-	def sendEmail(self, serverHandle, address, subject = None, *, testing_doNotSend = False, testing_printEmail = False, **kwargs):
-		messageHandle = self.EmailMessage(self)
+	def sendEmail(self, serverHandle, address, subject = None, *, testing_doNotSend = False, testing_printEmail = False, onError = None, **kwargs):
+		try:
+			messageHandle = self.EmailMessage(self)
 
-		yield messageHandle
+			yield messageHandle
 
-		message = messageHandle.build(address = address, subject = subject)
+			message = messageHandle.build(address = address, subject = subject)
 
-		if (testing_doNotSend):
-			print(f"An email would have been sent to {address} from {message['From']}")
-		else:
-			serverHandle.sendmail(message["From"], address, message.as_string())
+			if (testing_doNotSend):
+				print(f"An email would have been sent to {address} from {message['From']}")
+			else:
+				serverHandle.sendmail(message["From"], address, message.as_string())
 
-		if (testing_printEmail):
-			print(message.as_string())
+			if (testing_printEmail):
+				print(message.as_string())
+
+		except Exception as error:
+			if ((onError is None) or (not onError(error))):
+				raise error
 
 	def test_search(self):
-		with self.openRead(address = "omnitraks@decaturmold.com", password = "Fu3lu$@g3", host = "194.2.1.1") as serverHandle:
+		with self.openRead(address = "dmtebi@decaturmold.com", password = "M3$$3r$m1th262", host = "194.2.1.14") as serverHandle:
 			for emailHandle in self.search(serverHandle):
 				print(self.email_toDict(emailHandle))
 				break
 
 	def test_send(self):
-		with self.openWrite(address = "omnitraks@decaturmold.com", password = "Fu3lu$@g3", host = "194.2.1.1") as serverHandle:
-		# with self.openWrite(address = "dmtebi@decaturmold.com", password = "N0tchJ0hn$0n", host = "194.2.1.1") as serverHandle:
+		with self.openWrite(address = "josh.mayberry@decaturmold.com", password = "eagle555", host = "194.2.1.14") as serverHandle:
+		# with self.openWrite(address = "dmtebi@decaturmold.com", password = "M3$$3r$m1th262", host = "194.2.1.14") as serverHandle:
 			with self.sendEmail(serverHandle, address = "josh.mayberry@decaturmold.com") as messageHandle:
 				messageHandle.body.append("Test")
 				messageHandle.body.append("123")
@@ -668,5 +773,5 @@ def sendEmail(address_from, address_to, *, emailServer = None, **kwargs):
 			yield messageHandle
 
 if (__name__ == "__main__"):
-	controller = EmailServer()
-	controller.test_send()
+	controller = ExchangeServer()
+	controller.test_search()
